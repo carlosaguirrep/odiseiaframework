@@ -1,0 +1,57 @@
+{
+  "name": "odiseiaframework/odiseia-hero",
+  "title": "OdiseIA Hero",
+  "category": "text",
+  "icon": "dashicons-align-full-width",
+  "example": {},
+  "attributes": {
+    "layout": {
+      "type": "object",
+      "default": {
+        "type": "constrained"
+      }
+    },
+    "style": {
+      "type": "object",
+      "background": {
+        "backgroundImage": {
+          "url": "IMAGE_URL"
+        },
+        "backgroundPosition": "50% 50%",
+        "backgroundSize": "50%"
+      }
+    }
+  },
+  "supports": {
+    "anchor": true,
+    "align": [
+      "wide",
+      "full"
+    ],
+    "color": {
+      "background": true,
+      "text": false
+    },
+    "background": {
+      "backgroundImage": true,
+      "backgroundSize": true
+    },
+    "spacing": {
+      "margin": true,
+      "padding": true
+    },
+    "__experimentalLayout": {
+      "allowSwitching": false,
+      "default": {
+        "inherit": true
+      },
+      "type": "constrained"
+    }
+  },
+  "editorScript": "file:./index.js",
+  "render": "file:./render.php",
+  "render_callback": "render_odiseia_hero_block",
+  "usesContext": [
+    "blockEditor.innerBlocks"
+  ]
+}

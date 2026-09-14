@@ -28,3 +28,9 @@ node_modules/
 
 # dotenv environment variables file
 .env
+
+# Core Files Ready For Users
+core/*
+
+# Block Builder Develop Enviorment
+src

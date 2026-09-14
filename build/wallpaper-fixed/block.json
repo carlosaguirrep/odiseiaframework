@@ -1,0 +1,21 @@
+{
+  "apiVersion": 2,
+  "name": "odiseiaframework/wallpaper-fixed",
+  "title": "Wallpaper Fixed",
+  "category": "design",
+  "icon": "format-image",
+  "supports": {
+    "color": {
+      "background": true,
+      "gradients": true
+    }
+  },
+  "attributes": {
+    "style": {
+      "type": "object"
+    }
+  },
+  "style": "file:./style-index.css",
+  "editorScript": "file:./index.js",
+  "editorStyle": "file:./editor.scss"
+}

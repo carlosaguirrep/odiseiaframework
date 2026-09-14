@@ -1,0 +1,12 @@
+{
+  "name": "odiseiaframework/odiseia-list",
+  "title": "OdiseIa List",
+  "category": "text",
+  "icon": "format-list-bulleted",
+  "editorScript": "file:./index.js",
+  "style": "file:./style-index.css",
+  "render": "file:./render.php",
+  "supports": {
+    "html": false
+  }
+}
