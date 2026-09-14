@@ -32,7 +32,7 @@ class Odiseia_Options
         register_setting(
             'odiseiaFrameworkOptions', // Grupo de opciones
             'odiseia', // Nombre de la opción
-            [__CLASS__, 'odiseia_sanitize_options'] // Función de saneamiento
+            ['sanitize_callback' => [self::class, 'odiseia_sanitize_options']]
         );
 
         // Añadir una sección
@@ -216,20 +216,38 @@ class Odiseia_Options
         }
     }
 
-    function odiseia_sanitize_options($input) 
+    /**
+     * Option keys rendered as switches on the options page.
+     *
+     * These keys are already stored on existing sites, so they must not be renamed
+     * (including the historical "eneable" spelling).
+     */
+    const TOGGLE_OPTIONS = [
+        'odiseia_eneable_svg_support',
+        'odiseia_eneable_aos',
+        'odiseia_eneable_seo',
+        'odiseia_enable_content_generator',
+        'odiseia_enable_image_generator',
+    ];
+
+    /**
+     * Sanitizes the `odiseia` option array.
+     *
+     * Unchecked checkboxes are not submitted, so every known toggle is forced to 0/1.
+     *
+     * @param mixed $input Submitted option value (null when every switch is unchecked).
+     * @return array<string, int>
+     */
+    public static function odiseia_sanitize_options($input)
     {
-        // Definir valores por defecto
-        $defaults = array(
-            'odiseia_enable_svg_support' => 0
-        );
-    
-        // Combinar con valores enviados
-        $input = wp_parse_args($input, $defaults);
-    
-        // Forzar valores 0/1 para checkbox
-        $input['odiseia_enable_svg_support'] = isset($input['odiseia_enable_svg_support']) ? 1 : 0;
-    
-        return $input;
+        $input     = is_array($input) ? $input : [];
+        $sanitized = [];
+
+        foreach (self::TOGGLE_OPTIONS as $option_name) {
+            $sanitized[$option_name] = empty($input[$option_name]) ? 0 : 1;
+        }
+
+        return $sanitized;
     }
 
 

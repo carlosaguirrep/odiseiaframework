@@ -11,7 +11,7 @@ OdiseIaFramework is a WordPress plugin for building Gutenberg sites. It rests on
 2. Install dependencies and build:
    ```bash
    npm install
-   npm run build:all
+   npm run build
    ```
 3. Activate **OdiseIaFramework** in **Plugins**.
 4. Optional: set up an AI provider ([AI setup](#ai-setup)) and turn on AI SEO in the plugin options page.
@@ -54,16 +54,17 @@ The plugin stores its options in the `odiseia` option (an array). Option keys us
 
 Enable it with the AI SEO toggle in the plugin options page (`odiseia['odiseia_eneable_seo']`). It adds:
 
-- A sidebar panel in the block editor for **meta title**, **meta description**, and **keywords** on posts and pages.
+- A sidebar panel for **meta title**, **meta description**, and **keywords** on posts and pages, in the post editor and when editing pages in the Site Editor. Change the post types with the `odiseia_seo_post_types` filter. Only post types that support `custom-fields` are kept.
 - Storage in post meta: `_meta_title`, `_meta_description`, `_meta_keywords`.
-- Output of these values in `<head>` and in the document title.
-- An **Analyze** button that sends the content to the AI provider and returns a rating, suggestions, and keywords.
+- Output of the description and keywords as `<meta>` tags in `<head>`.
+- The meta title replaces the **complete** document title (`<title>`), with no site name appended. When it is empty, WordPress uses its default title.
+- An **Analyze** button that sends the content to the AI provider. It returns a rating of the current full title, complete title suggestions (up to 60 characters), keywords, and a meta description.
 
 | REST endpoint | Value |
 |---------------|-------|
 | Route | `POST /wp-json/odiseia-seo-tool/v1/analyze-content` |
 | Required capability | `edit_posts` |
-| Success response | `{ rating, suggestions, keywords }` |
+| Success response | `{ rating, suggestions, keywords, description }` |
 | AI unavailable or no provider configured | HTTP `503` |
 
 The endpoint uses `wp_ai_client_prompt()` from the WordPress core AI Client.
@@ -84,7 +85,7 @@ For development:
 ```bash
 cd wp-content/plugins/odiseiaframework
 npm install
-npm run build:all
+npm run build
 ```
 
 Then activate the plugin in **Plugins**. The plugin loads blocks and editor scripts from `build/`, so the build must run before activation.
@@ -127,18 +128,20 @@ AI SEO uses the AI Client in WordPress core. Credentials are managed by WordPres
 
 | Script | What it does |
 |--------|--------------|
-| `npm run build` | Builds blocks from `src/` into `build/` with `@wordpress/scripts`. PHP files are copied (`--webpack-copy-php`). |
-| `npm run start` | Same as `build`, in watch mode. |
-| `npm run build:plugins` | Bundles every `src/Plugins/**/*.js` into `build/Plugins/` with `webpack.plugins.js`. |
-| `npm run start:plugins` | Same as `build:plugins`, in watch mode. |
-| `npm run build:all` | Runs `build`, then `build:plugins`. |
-| `npm run start:all` | Runs `start` and `start:plugins` in parallel. |
+| `npm run build` | Production build (minified, no source maps) of everything in `src/` into `build/` with `@wordpress/scripts`: blocks and editor plugins. PHP files are copied (`--webpack-copy-php`). |
+| `npm run start` | Development build of the same entries in watch mode (unminified, with source maps). |
+| `npm run build:all` | Alias of `build`. |
+| `npm run start:all` | Alias of `start`. |
 | `npm run add-block -- <name>` | Scaffolds a new block in `src/<name>/`. See [Adding a block](#adding-a-block). |
 | `npm run lint:js` | Lints JavaScript. |
 | `npm run lint:css` | Lints styles. |
 | `npm run format` | Formats code. |
 | `npm run packages-update` | Updates `@wordpress/*` packages. |
 | `npm run plugin-zip` | Creates a plugin `.zip`. |
+
+Both builds come from one toolchain: `webpack.config.js` extends the default `@wordpress/scripts` config. Block entry points are detected from each `block.json`, and every `src/Plugins/*.js` file is added as an entry that outputs `build/Plugins/{name}.js` plus `build/Plugins/{name}.asset.php`. The PHP side reads the dependencies and version for each editor script from its `.asset.php` file. If that file is missing, the script is not enqueued. Editor plugins must import `@wordpress/*` packages instead of using `wp.*` globals, because dependency detection only sees imports.
+
+> **Always run `npm run build` before committing.** `build/` is committed, and `npm run start` writes development output (unminified, with source maps) into it.
 
 ### Project structure
 
@@ -164,7 +167,7 @@ odiseiaframework/
 ├── assets/                 # Admin styles/scripts, front-end CSS, logo
 ├── core/                   # Optional site-specific PHP, auto-loaded, git-ignored
 ├── create-block.js         # Block scaffolding script
-└── webpack.plugins.js      # Webpack config for src/Plugins
+└── webpack.config.js       # Extends the @wordpress/scripts config with src/Plugins entries
 ```
 
 ### How the PHP side loads

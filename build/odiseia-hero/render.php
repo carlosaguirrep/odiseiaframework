@@ -1,14 +1,4 @@
 <?php
-$classes = 'odiseia-hero';
-if (!empty($attributes['className'])) {
-    $classes .= ' ' . $attributes['className'];
-}
-if (!empty($attributes['align'])) {
-    $classes .= ' align' . $attributes['align']; // Agrega alignwide o alignfull si está configurado
-}
-
-if ( ! empty( $attributes['className'] ) ) {
-    $classes .= ' ' . $attributes['className'];
-}
-
-echo sprintf( $content );
+// $content is the inner blocks markup already rendered by core; printing it through
+// sprintf() caused an ArgumentCountError whenever it contained a "%" character.
+echo $content; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
