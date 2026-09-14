@@ -2,6 +2,14 @@
   "name": "odiseiaframework",
   "version": "0.1.0",
   "main": "build/index.js",
+  "files": [
+    "build",
+    "includes",
+    "templates",
+    "assets",
+    "odiseiaframework.php",
+    "README.md"
+  ],
   "scripts": {
     "build": "wp-scripts build --webpack-copy-php --webpack-src-dir=src",
     "build:all": "npm run build",
