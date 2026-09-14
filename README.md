@@ -54,21 +54,51 @@ The plugin stores its options in the `odiseia` option (an array). Option keys us
 
 Enable it with the AI SEO toggle in the plugin options page (`odiseia['odiseia_eneable_seo']`). It adds:
 
-- A sidebar panel for **meta title**, **meta description**, and **keywords**, in the post editor and when editing pages in the Site Editor.
+- A sidebar panel for **meta title**, **meta description**, and **focus keyword**, in the post editor and when editing pages in the Site Editor.
 - Support for every public post type shown in the REST API (`public` and `show_in_rest`), including custom post types, except attachments. See [Supported post types](#supported-post-types).
-- Storage in post meta: `_meta_title`, `_meta_description`, `_meta_keywords`.
-- Output of the description and keywords as `<meta>` tags in `<head>` on single views of the supported post types, the static front page, and the page set as **Posts page**.
+- Storage in post meta: `_meta_title`, `_meta_description`, `_meta_focus_keyword`.
+- Output of the description as a `<meta name="description">` tag in `<head>` on single views of the supported post types, the static front page, and the page set as **Posts page**. The focus keyword is never output, and no keywords meta tag is output (see the note in [SEO checks](#seo-checks)).
 - The meta title replaces the **complete** document title (`<title>`), with no site name appended. On paginated content (`<!--nextpage-->` posts or later pages of the Posts page), the WordPress page number is kept: `Meta title – Page 2`. When the meta title is empty, WordPress uses its default title.
-- An **Analyze** button that sends the content to the AI provider. It returns a rating of the current full title, complete title suggestions (up to 60 characters), keywords, and a meta description.
+- An **Analyze** button that sends the content to the AI provider. It returns a rating of the current full title, complete title suggestions (up to 60 characters), 3 to 5 suggested focus keyphrases (realistic search phrases, most relevant first), and a meta description. Clicking a suggested keyphrase sets it as the **Focus keyword**, and the [SEO checks](#seo-checks) update immediately. The suggestion that matches the current focus keyword, ignoring case, accents, and quote style, is shown as selected; clicking it again clears the focus keyword. Suggestions that differ only in case, accents, or quote style are shown once.
 
 | REST endpoint | Value |
 |---------------|-------|
 | Route | `POST /wp-json/odiseia-seo-tool/v1/analyze-content` |
 | Required capability | `edit_posts` |
-| Success response | `{ rating, suggestions, keywords, description }` |
+| Success response | `{ rating, suggestions, focus_keyphrases, description }` (`focus_keyphrases`: up to 5 strings) |
 | AI unavailable or no provider configured | HTTP `503` |
 
 The endpoint uses `wp_ai_client_prompt()` from the WordPress core AI Client.
+
+#### SEO checks
+
+The **SEO checks** section at the bottom of the sidebar scores the content from 0 to 100 while you edit. It uses no AI: every check runs in the browser on the SEO fields, the URL slug, and the blocks, and updates as they change.
+
+- **Focus keyword** (`_meta_focus_keyword`): the main search phrase the content should rank for. Only these checks use it. It is not output on the page and not sent to the AI provider. Matching ignores case, accents, and typographic quotes (`’` matches `'`), and looks for the whole phrase.
+- **Score**: each applicable check counts 1 when it passes, 0.5 for a warning, and 0 for a problem. Checks that do not apply, such as image alt text when there are no images, are left out. **Good** is 80 or more, **Needs improvement** 50 to 79, and **Poor** below 50.
+
+| # | Check | Applies when | Passes when | Otherwise |
+|---|-------|--------------|-------------|-----------|
+| 1 | Meta title set | Always | Set | Warning: the default title is used |
+| 2 | Title length | Always. Uses the meta title, or the default title | 30 to 60 characters | Warning: under 30 could be more descriptive, over 60 may be truncated in search results |
+| 3 | Meta description set | Always | Set | Warning: search engines pick a snippet from the page |
+| 4 | Meta description length | Description set | 70 to 160 characters | Warning: may be too short to summarize the page, or truncated in search results |
+| – | Focus keyword set | No focus keyword | – | Warning. Replaces checks 5 to 9 |
+| 5 | Keyword in title | Keyword set | Found | Warning |
+| 6 | Keyword in meta description | Keyword and description set | Found | Warning |
+| 7 | Keyword in URL slug | Keyword set, the permalink structure includes the slug, and the page is not the static front page | Found, using the slug WordPress creates for the keyword: generic transliteration (`Müller Straße` → `muller-strase`) or the German, Danish, and Serbian/Bosnian rules (`mueller-strasse`) | Warning |
+| 8 | Keyword in a heading | Keyword set and the content has headings | Found | Warning |
+| 9 | Keyword in content | Keyword set | Found | Problem |
+| 10 | Readable URL slug | The permalink structure includes the slug, and the page is not the static front page | The slug has a word: letters, optionally with digits (`mp3`, `iphone15`), at least two characters unless non-Latin (`猫`) | Warning for numeric (`123`), placeholder (`post-123`, `untitled-2`, `auto-draft`), or hash-like (`a1b2c3d4e5f6a7b8`) slugs. Information (not scored) when no slug is set yet |
+| 11 | Headings in long content | 5 or more non-empty paragraphs | At least one heading | Warning |
+| 12 | Image alt text | The content has images | Every image has alt text | Warning with the number of images missing it |
+| 13 | Descriptive link text | The content has links, including Buttons and linked images (their alt text is the link text) | No link text is empty or generic | Warning with the number of links, for text such as "click here", "read more", "aquí", or "leer más" |
+
+Every check is based on Google's [SEO Starter Guide](https://developers.google.com/search/docs/fundamentals/seo-starter-guide). By design, there are no checks for keyword density, word count or content length, the number or order of headings, a single H1, or meta keywords, because the guide says they do not matter for Google Search. The length checks are about truncation in search results, not ranking.
+
+Content is read from block attributes: rich text in any block, Image, Media & Text, Cover (when it renders an `<img>`), Button, and the HTML of Classic and Custom HTML blocks. The content of synced patterns, the output of server-rendered blocks, and text that third-party blocks store outside HTML attributes are not analyzed.
+
+> **Note:** According to the Starter Guide, Google Search doesn't use the keywords meta tag, so the plugin has no Meta Keywords field and outputs no `<meta name="keywords">` tag. Values saved in `_meta_keywords` by earlier versions are left in the database untouched and unused: the key is no longer registered, revisioned, or exposed in the REST API.
 
 #### Supported post types
 
@@ -159,6 +189,7 @@ AI SEO uses the AI Client in WordPress core. Credentials are managed by WordPres
 | `npm run build:all` | Alias of `build`. |
 | `npm run start:all` | Alias of `start`. |
 | `npm run add-block -- <name>` | Scaffolds a new block in `src/<name>/`. See [Adding a block](#adding-a-block). |
+| `npm run test:unit` | Runs the JavaScript unit tests with Jest through `@wordpress/scripts`, such as the SEO check tests in `src/Plugins/seo/test/`. |
 | `npm run lint:js` | Lints JavaScript. |
 | `npm run lint:css` | Lints styles. |
 | `npm run format` | Formats code. |
@@ -188,6 +219,7 @@ odiseiaframework/
 │   ├── odiseia-list-item/
 │   ├── wallpaper-fixed/
 │   └── Plugins/            # Editor extensions (seo.js, aos.js, responsive*.js)
+│       └── seo/            # SEO helpers imported by seo.js (checks, content analysis, tests); not entries
 ├── build/                  # Compiled output (generated)
 ├── templates/              # Admin page templates (options, gallery)
 ├── assets/                 # Admin styles/scripts, front-end CSS, logo
