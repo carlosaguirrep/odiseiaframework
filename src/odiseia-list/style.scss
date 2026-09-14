@@ -1,0 +1,36 @@
+.odiseia-list{
+    list-style-type: none;
+    padding: 0px;
+    li{
+        display: flex;
+        gap: 20px;
+        margin-bottom: 35px;
+        .number{
+            width: 60px;
+            height: 60px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #EFF3FD;
+            border-radius: 50%;
+            color: #2851E3;
+            font-weight: bold;
+        }
+        .list-content{
+            display: flex;
+            flex-direction: column;
+           *{
+            margin-top: 0px;
+            margin-bottom: 0px;
+           }
+           h3{
+            margin-bottom: 20px;
+           }
+            p{
+                opacity: .5;
+                margin-bottom: 0px;
+            }
+        }
+    }
+}

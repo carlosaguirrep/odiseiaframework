@@ -32,5 +32,5 @@ node_modules/
 # Core Files Ready For Users
 core/*
 
-# Block Builder Develop Enviorment
-src
+# Local skill registry cache
+.atl/

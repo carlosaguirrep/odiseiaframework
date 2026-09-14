@@ -1,0 +1,6 @@
+$block-padding: 20px;
+
+.wp-block-odiseIaFramework-odiseia-hero {
+    padding: $block-padding;
+    background-color: #f3f3f3;
+}
