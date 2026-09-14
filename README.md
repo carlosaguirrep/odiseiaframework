@@ -54,10 +54,11 @@ The plugin stores its options in the `odiseia` option (an array). Option keys us
 
 Enable it with the AI SEO toggle in the plugin options page (`odiseia['odiseia_eneable_seo']`). It adds:
 
-- A sidebar panel for **meta title**, **meta description**, and **keywords** on posts and pages, in the post editor and when editing pages in the Site Editor. Change the post types with the `odiseia_seo_post_types` filter. Only post types that support `custom-fields` are kept.
+- A sidebar panel for **meta title**, **meta description**, and **keywords**, in the post editor and when editing pages in the Site Editor.
+- Support for every public post type shown in the REST API (`public` and `show_in_rest`), including custom post types, except attachments. See [Supported post types](#supported-post-types).
 - Storage in post meta: `_meta_title`, `_meta_description`, `_meta_keywords`.
-- Output of the description and keywords as `<meta>` tags in `<head>`.
-- The meta title replaces the **complete** document title (`<title>`), with no site name appended. When it is empty, WordPress uses its default title.
+- Output of the description and keywords as `<meta>` tags in `<head>` on single views of the supported post types, the static front page, and the page set as **Posts page**.
+- The meta title replaces the **complete** document title (`<title>`), with no site name appended. On paginated content (`<!--nextpage-->` posts or later pages of the Posts page), the WordPress page number is kept: `Meta title – Page 2`. When the meta title is empty, WordPress uses its default title.
 - An **Analyze** button that sends the content to the AI provider. It returns a rating of the current full title, complete title suggestions (up to 60 characters), keywords, and a meta description.
 
 | REST endpoint | Value |
@@ -68,6 +69,31 @@ Enable it with the AI SEO toggle in the plugin options page (`odiseia['odiseia_e
 | AI unavailable or no provider configured | HTTP `503` |
 
 The endpoint uses `wp_ai_client_prompt()` from the WordPress core AI Client.
+
+#### Supported post types
+
+By default, AI SEO covers every post type registered with `public` and `show_in_rest` set to `true`, except `attachment`. Custom post types are included automatically, at any `init` priority. The same list controls meta registration, the editor sidebar, and the front-end output.
+
+Narrow or extend the list with the `odiseia_seo_post_types` filter. Add the filter before `init` finishes: the list is computed once per request.
+
+```php
+add_filter( 'odiseia_seo_post_types', function ( $post_types ) {
+	return array_values( array_diff( $post_types, array( 'product' ) ) );
+} );
+```
+
+WordPress only exposes post meta in the REST API for post types that support `custom-fields`. AI SEO adds that support to listed post types that lack it, so the editor can save the SEO fields. Side effects for those post types:
+
+- **Block editor**: a **Custom fields** option appears in the editor **Preferences**. It follows each user's existing "Custom fields" preference (the `enable_custom_fields` user meta, shared across all post types), so it stays off unless that user has turned it on.
+- **Classic editing screens** (post types without `editor` support, or with the block editor disabled): the legacy **Custom Fields** meta box is registered. It is hidden by default and can be shown from **Screen Options**. It does not list the SEO keys, which are protected.
+- **REST API**: responses include a `meta` field. It also exposes any other plugin's meta registered for all post types with `show_in_rest`.
+
+For post types that support `revisions`, the SEO fields are revisioned:
+
+- **Preview of a published post** shows unsaved SEO changes when the post type supports both `revisions` and `autosave`. Otherwise it shows the saved SEO values.
+- **Drafts**: **Preview** and **Save draft** run a full save, so SEO changes are saved. The periodic autosave of a draft does not store the SEO values.
+- **Restoring a revision**, from the block editor's revisions view or the classic **Revisions** screen, restores the SEO values stored in that revision, including empty ones: clearing a field saves an empty value, which later revisions store and which is restored as empty. A revision stores no SEO value for a field that had never been set when the revision was saved, or when the revision was saved before the SEO fields were revisioned. Restoring it keeps the current value of that field.
+- **Comparing revisions** in the block editor: an SEO field that a revision does not store shows the post's current value instead of an empty value, so the comparison reflects what restoring that revision would keep.
 
 ## Requirements
 

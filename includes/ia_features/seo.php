@@ -2,6 +2,7 @@
 namespace odiseIAFramework\IA_features;
 
 use WP_Error;
+use WP_Post;
 use WP_REST_Request;
 
 class Seo{
@@ -13,14 +14,23 @@ class Seo{
     const MAX_CONTENT_LENGTH = 20000;
 
     /**
-     * Post types that get the SEO meta fields and the editor sidebar.
-     */
-    const POST_TYPES = ['post', 'page'];
-
-    /**
      * Protected SEO meta keys edited from the block editor sidebar.
      */
     const META_KEYS = ['_meta_title', '_meta_description', '_meta_keywords'];
+
+    /**
+     * Per-request cache of get_post_types(). Null until computed after `init` has finished.
+     *
+     * @var string[]|null
+     */
+    private static $post_types = null;
+
+    /**
+     * SEO meta values to keep while a revision is restored, keyed by post ID, then meta key.
+     *
+     * @var array<int, array<string, mixed>>
+     */
+    private static $restore_snapshots = [];
 
     /**
      * Runs on `init` (see odiseiaframework_init()).
@@ -32,15 +42,21 @@ class Seo{
             return;
         }
 
-        // init() runs on `init` at the default priority. Registering the meta later on the same
-        // hook lets custom post types added through `odiseia_seo_post_types` be registered first,
-        // and it still happens before `rest_api_init`.
-        add_action('init', [self::class, 'odiseia_register_seo_meta'], 20);
+        // `wp_loaded` fires after every `init` callback, so post types registered at any `init`
+        // priority (and `odiseia_seo_post_types` filters added there) are known. It still runs
+        // before REST requests are served (`parse_request`), admin screens load, and templates render.
+        add_action('wp_loaded', [self::class, 'odiseia_register_seo_meta']);
 
         add_action('rest_api_init', [self::class, 'odiseia_endpoint_seo_rest_api']);
         add_action('enqueue_block_editor_assets', [self::class, 'odiseia_enqueue_scripts_ia_tools']);
         add_action('wp_head', [self::class, 'meta_tags']);
         add_filter('pre_get_document_title', [self::class, 'title_replace_seo']);
+
+        // Core restores revisioned meta in wp_restore_post_revision_meta(), hooked at priority 10.
+        add_action('wp_restore_post_revision', [self::class, 'snapshot_seo_meta_before_restore'], 9, 2);
+        add_action('wp_restore_post_revision', [self::class, 'keep_seo_meta_missing_from_revision'], 11, 2);
+        // The block editor restores revisions in place from the REST response, without core's restore.
+        add_filter('rest_prepare_revision', [self::class, 'fill_seo_meta_missing_from_revision'], 10, 2);
     }
 
     /**
@@ -56,29 +72,46 @@ class Seo{
     }
 
     /**
-     * Post types that get the SEO meta fields and the editor sidebar.
+     * Post types that get the SEO meta fields, the editor sidebar, and the front-end output.
      *
-     * Used for meta registration, the editor script enqueue check, and the editor-side guard.
-     * Meta is only exposed in the REST API for post types that support `custom-fields`, so
-     * other post types are dropped.
+     * Single source for meta registration, the editor script enqueue check, the editor-side
+     * guard, and the front-end title and meta tags. Defaults to every public post type shown in
+     * the REST API (the block editor needs it), including custom post types, except attachments.
      *
      * @return string[]
      */
     public static function get_post_types()
     {
-        /**
-         * Filters the post types that get the SEO meta fields and the editor sidebar.
-         *
-         * @param string[] $post_types Post type names. Default `['post', 'page']`.
-         */
-        $post_types = apply_filters('odiseia_seo_post_types', self::POST_TYPES);
-        if (! is_array($post_types)) {
-            return [];
+        if (null !== self::$post_types) {
+            return self::$post_types;
         }
 
-        return array_values(array_unique(array_filter($post_types, function ($post_type) {
-            return is_string($post_type) && post_type_supports($post_type, 'custom-fields');
-        })));
+        $defaults = array_values(array_diff(
+            \get_post_types(['public' => true, 'show_in_rest' => true]),
+            ['attachment']
+        ));
+
+        /**
+         * Filters the post types that get the SEO meta fields, the editor sidebar, and the
+         * front-end output. Evaluated once per request after `init`.
+         *
+         * @param string[] $post_types Post type names. Default all public post types shown in
+         *                             the REST API, except `attachment`.
+         */
+        $post_types = apply_filters('odiseia_seo_post_types', $defaults);
+        $post_types = is_array($post_types)
+            ? array_values(array_unique(array_filter($post_types, function ($post_type) {
+                return is_string($post_type) && post_type_exists($post_type);
+            })))
+            : [];
+
+        // Post types can be registered at any `init` priority, so a list computed before `init`
+        // has finished may be incomplete and is not cached.
+        if (did_action('init') && ! doing_action('init')) {
+            self::$post_types = $post_types;
+        }
+
+        return $post_types;
     }
 
     /***
@@ -88,6 +121,26 @@ class Seo{
     public static function odiseia_register_seo_meta()
     {
         foreach (self::get_post_types() as $post_type) {
+            // The REST posts controller only adds the `meta` field to custom post types that
+            // support `custom-fields`, so without it the SEO meta could not be saved from the
+            // editor. Side effects for post types that gain the support here:
+            // - Block editor: a "Custom fields" option appears in Preferences. It follows each
+            //   user's existing preference (`enable_custom_fields` user meta, shared across post
+            //   types), so it stays off unless that user has turned it on.
+            // - Classic editing screens (no `editor` support, or block editor disabled): the
+            //   legacy Custom Fields meta box is registered, hidden by default in Screen Options.
+            //   It never lists these protected (underscore-prefixed) keys.
+            // - REST responses gain a `meta` field, which also exposes other meta registered for
+            //   all post types with `show_in_rest`.
+            if (! post_type_supports($post_type, 'custom-fields')) {
+                add_post_type_support($post_type, 'custom-fields');
+            }
+
+            // Revisioned meta is stored in autosaves, which is what "Preview" reads for published
+            // posts of post types that also support `autosave`. register_meta() rejects `revisions_enabled` (with _doing_it_wrong()) when the
+            // post type does not support revisions, so only enable it where it is supported.
+            $revisions_enabled = post_type_supports($post_type, 'revisions');
+
             foreach (self::META_KEYS as $meta_key) {
                 // register_meta() expects an object type ('post'), not a post type, so use
                 // register_post_meta() to scope the key to each post type.
@@ -97,8 +150,15 @@ class Seo{
                     'single'            => true,
                     'sanitize_callback' => 'sanitize_text_field',
                     'auth_callback'     => [self::class, 'can_edit_seo_meta'],
+                    'revisions_enabled' => $revisions_enabled,
                 ));
             }
+        }
+
+        // The autosaves REST controller writes revisioned meta straight to the revision, whose
+        // object subtype is `revision`, so the per-post-type sanitize callback above does not run.
+        foreach (self::META_KEYS as $meta_key) {
+            add_filter("sanitize_post_meta_{$meta_key}_for_revision", 'sanitize_text_field');
         }
     }
 
@@ -113,6 +173,138 @@ class Seo{
     public static function can_edit_seo_meta($allowed, $meta_key, $object_id)
     {
         return current_user_can('edit_post', (int) $object_id);
+    }
+
+    /**
+     * Records the post's SEO values that the revision being restored does not store.
+     *
+     * Hooked to `wp_restore_post_revision` before wp_restore_post_revision_meta() (priority 10),
+     * which deletes every revisioned meta key on the post and then copies the revision's rows.
+     * A revision has no row for a key when the field had never been set when the revision was
+     * saved, or when the revision was saved before SEO meta was revisioned, so core would
+     * otherwise wipe the current value. Clearing a field saves an empty value, which later
+     * revisions store as a row and which is restored as empty.
+     *
+     * Covers the classic revisions screen (wp-admin/revision.php) and XML-RPC. The block editor
+     * restores revisions through the REST API instead, see fill_seo_meta_missing_from_revision().
+     *
+     * @param int $post_id     Post ID.
+     * @param int $revision_id ID of the revision being restored.
+     */
+    public static function snapshot_seo_meta_before_restore($post_id, $revision_id)
+    {
+        $post_id     = (int) $post_id;
+        $revision_id = (int) $revision_id;
+        unset(self::$restore_snapshots[$post_id]);
+
+        $post_type = get_post_type($post_id);
+        if (! $post_type || ! in_array($post_type, self::get_post_types(), true)) {
+            return;
+        }
+
+        // Only keys that core is about to restore, i.e. registered with `revisions_enabled`.
+        $snapshot = [];
+        foreach (array_intersect(self::META_KEYS, wp_post_revision_meta_keys($post_type)) as $meta_key) {
+            if (! metadata_exists('post', $revision_id, $meta_key) && metadata_exists('post', $post_id, $meta_key)) {
+                $snapshot[$meta_key] = get_post_meta($post_id, $meta_key, true);
+            }
+        }
+
+        if ($snapshot) {
+            self::$restore_snapshots[$post_id] = $snapshot;
+        }
+    }
+
+    /**
+     * Writes back the SEO values recorded by snapshot_seo_meta_before_restore().
+     *
+     * Hooked to `wp_restore_post_revision` after wp_restore_post_revision_meta(). Meta updates
+     * do not create revisions, so this adds none beyond the one core creates for the restore.
+     *
+     * @param int $post_id     Post ID.
+     * @param int $revision_id ID of the restored revision.
+     */
+    public static function keep_seo_meta_missing_from_revision($post_id, $revision_id)
+    {
+        $post_id = (int) $post_id;
+        if (empty(self::$restore_snapshots[$post_id])) {
+            return;
+        }
+
+        $snapshot = self::$restore_snapshots[$post_id];
+        unset(self::$restore_snapshots[$post_id]);
+
+        foreach ($snapshot as $meta_key => $meta_value) {
+            // Another callback may have written the key after core restored the revision's meta.
+            if (metadata_exists('post', $post_id, $meta_key)) {
+                continue;
+            }
+
+            // update_post_meta() unslashes the value, so slash it as _wp_copy_post_meta() does.
+            update_post_meta($post_id, $meta_key, wp_slash($meta_value));
+        }
+    }
+
+    /**
+     * Reports the post's current SEO values for keys that a revision or autosave does not store.
+     *
+     * Hooked to `rest_prepare_revision`, which WP_REST_Revisions_Controller::prepare_item_for_response()
+     * applies to every revision and autosave returned by the REST API. The block editor restores a
+     * revision in place: it copies the revision's `meta` from this response into the post and saves
+     * the post, so wp_restore_post_revision() and snapshot_seo_meta_before_restore() never run. For a
+     * single key without a row, the REST meta field returns the schema default (''), which that save
+     * would store over the current value. Keys the revision has a row for, even an empty one, are
+     * left as stored.
+     *
+     * The revisions and autosaves routes require `edit_post` on the parent post in every context;
+     * the same check is repeated in case the controller is used outside those routes.
+     *
+     * @param \WP_REST_Response|mixed $response The response object.
+     * @param WP_Post|mixed           $post     Revision object. The autosaves controller passes the
+     *                                          parent post itself after updating the author's own draft.
+     * @return \WP_REST_Response|mixed
+     */
+    public static function fill_seo_meta_missing_from_revision($response, $post)
+    {
+        if (! $response instanceof \WP_REST_Response || ! $post instanceof WP_Post || 'revision' !== $post->post_type) {
+            return $response;
+        }
+
+        // `meta` is missing for HEAD requests and when excluded by `_fields`.
+        $data = $response->get_data();
+        if (! is_array($data) || ! isset($data['meta']) || ! is_array($data['meta'])) {
+            return $response;
+        }
+
+        $parent_id   = (int) $post->post_parent;
+        $parent_type = $parent_id ? get_post_type($parent_id) : false;
+        if (! $parent_type
+            || ! in_array($parent_type, self::get_post_types(), true)
+            || ! current_user_can('edit_post', $parent_id)
+        ) {
+            return $response;
+        }
+
+        $changed = false;
+        foreach (self::META_KEYS as $meta_key) {
+            // update_post_meta() redirects revision IDs to the parent post; get_post_meta() and
+            // metadata_exists() read the revision's own rows, so the parent ID is passed explicitly below.
+            if (! array_key_exists($meta_key, $data['meta']) || metadata_exists('post', $post->ID, $meta_key)) {
+                continue;
+            }
+
+            $current = get_post_meta($parent_id, $meta_key, true);
+            if (is_scalar($current)) {
+                $data['meta'][$meta_key] = (string) $current;
+                $changed                 = true;
+            }
+        }
+
+        if ($changed) {
+            $response->set_data($data);
+        }
+
+        return $response;
     }
 
 
@@ -384,18 +576,43 @@ class Seo{
         return $clean;
     }
 
-    public static function meta_tags() {
-        if ( is_singular() ) {
-            $post_id = get_queried_object_id();
-            $meta_description = get_post_meta( $post_id, '_meta_description', true );
-            $meta_keywords = get_post_meta( $post_id, '_meta_keywords', true );
+    /**
+     * ID of the post whose SEO meta applies to the current front-end request.
+     *
+     * Covers singular views (including the page set as static front page) and the page set as
+     * "Posts page", where WordPress queries that page but is_singular() is false. Only posts of
+     * a post type returned by get_post_types() qualify.
+     *
+     * @return int Post ID, or 0 when no SEO meta applies.
+     */
+    private static function get_seo_post_id() {
+        if ( ! is_singular() && ! ( is_home() && ! is_front_page() ) ) {
+            return 0;
+        }
 
-            if ( $meta_description ) {
-                echo '<meta name="description" content="' . esc_attr( $meta_description ) . '">' . "\n";
-            }
-            if ( $meta_keywords ) {
-                echo '<meta name="keywords" content="' . esc_attr( $meta_keywords ) . '">' . "\n";
-            }
+        $post = get_queried_object();
+        if ( ! $post instanceof WP_Post || ! in_array( $post->post_type, self::get_post_types(), true ) ) {
+            return 0;
+        }
+
+        return (int) $post->ID;
+    }
+
+    public static function meta_tags() {
+        $post_id = self::get_seo_post_id();
+        // Do not expose a summary of content that is behind a password.
+        if ( ! $post_id || post_password_required( $post_id ) ) {
+            return;
+        }
+
+        $meta_description = get_post_meta( $post_id, '_meta_description', true );
+        $meta_keywords = get_post_meta( $post_id, '_meta_keywords', true );
+
+        if ( $meta_description ) {
+            echo '<meta name="description" content="' . esc_attr( $meta_description ) . '">' . "\n";
+        }
+        if ( $meta_keywords ) {
+            echo '<meta name="keywords" content="' . esc_attr( $meta_keywords ) . '">' . "\n";
         }
     }
 
@@ -403,26 +620,42 @@ class Seo{
      * Uses the SEO meta title as the complete document title.
      *
      * Hooked to `pre_get_document_title`: a non-empty return value short-circuits
-     * wp_get_document_title(), so no site name or tagline is appended. Singular views
-     * include the page set as static front page.
+     * wp_get_document_title(), so no site name or tagline is appended. The page number of
+     * paginated views is kept, as core does.
      *
      * @param string $title Title from earlier callbacks. Default empty string.
      * @return string
      */
     public static function title_replace_seo( $title ) {
-        if ( ! is_singular() ) {
+        $post_id = self::get_seo_post_id();
+        if ( ! $post_id ) {
             return $title;
         }
 
-        $meta_title = get_post_meta( get_queried_object_id(), '_meta_title', true );
+        $meta_title = get_post_meta( $post_id, '_meta_title', true );
         if ( ! is_string( $meta_title ) || '' === trim( $meta_title ) ) {
             return $title;
         }
 
+        $parts = [ $meta_title ];
+
+        // Mirrors wp_get_document_title(): `page` is set by <!--nextpage--> pagination and
+        // `paged` by the Posts page archive pagination.
+        $page  = (int) get_query_var( 'page' );
+        $paged = (int) get_query_var( 'paged' );
+        if ( ( $paged >= 2 || $page >= 2 ) && ! is_404() ) {
+            // Core string without a text domain on purpose, so the existing core translation applies.
+            /* translators: %s: Page number. */
+            $parts[] = sprintf( __( 'Page %s' ), max( $paged, $page ) ); // phpcs:ignore WordPress.WP.I18n.MissingArgDomain
+        }
+
+        /** This filter is documented in wp-includes/general-template.php */
+        $sep = apply_filters( 'document_title_separator', '-' );
+
         // The short-circuit skips the `document_title` filter, which is where core texturizes
         // and escapes the title, so apply it here to keep the output formatted the same way.
         /** This filter is documented in wp-includes/general-template.php */
-        return apply_filters( 'document_title', $meta_title );
+        return apply_filters( 'document_title', implode( " $sep ", $parts ) );
     }
 
 }
