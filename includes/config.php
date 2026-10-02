@@ -60,6 +60,8 @@ class Config
             'aos-css',
             'https://unpkg.com/aos@2.3.1/dist/aos.css'
         );
+        // AOS slide animations start off-screen; prevent horizontal scroll.
+        wp_add_inline_style('aos-css', 'body{overflow-x:hidden}');
     
         // AOS JS
         wp_enqueue_script(

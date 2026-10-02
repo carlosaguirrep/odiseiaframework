@@ -28,7 +28,6 @@ function odiseiaframework_init() {
     \odiseIAFramework\IA_features\Seo::init();
     \odiseIAFramework\Blocks::init();
     \odiseIAFramework\Config::init();
-    \odiseIAFramework\Ponder::init();
     \odiseIAFramework\Odiseia_Options::init();
 }
 add_action( 'init', 'odiseiaframework_init' );

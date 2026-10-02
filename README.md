@@ -44,10 +44,9 @@ The plugin stores its options in the `odiseia` option (an array). Option keys us
 
 | Extension | Enabled by | What it does |
 |-----------|------------|--------------|
-| AOS animations | `odiseia['odiseia_eneable_aos']` | Adds an animation selector to Group, Columns, and Cover blocks. On render it adds a `data-aos` attribute and loads AOS 2.3.1 from `unpkg.com`. |
+| AOS animations | `odiseia['odiseia_eneable_aos']` | Adds an animation selector to Group, Columns, and Cover blocks. On render it adds a `data-aos` attribute and loads AOS 2.3.1 from `unpkg.com`, plus `body{overflow-x:hidden}` so slide animations don't cause horizontal scroll. |
 | SVG uploads | `odiseia['odiseia_eneable_svg_support']` | Allows `.svg` in the Media Library. SVG files are **not sanitized**, so enable this only when every uploader is trusted. |
 | Wide alignment | Always on | Calls `add_theme_support( 'align-wide' )`. |
-| Responsive controls | Always enqueued | In progress. See [Roadmap](#roadmap). |
 | Custom PHP loader | Always on | Loads every `core/*.php` file on `init`. Use it for site-specific code. The `core/` directory is git-ignored. |
 
 ### AI SEO
@@ -209,7 +208,6 @@ odiseiaframework/
 │   ├── autoloader.php      # Autoloader for the odiseIAFramework namespace
 │   ├── blocks.php          # Blocks: block registration and the OdiseIa Blocks page
 │   ├── config.php          # Config: option-driven features, theme support, core/ loader
-│   ├── ponder.php          # Ponder: extensions for core blocks (responsive assets)
 │   ├── odiseia_options.php # Odiseia_Options: plugin options page
 │   └── ia_features/
 │       └── seo.php         # Seo: AI SEO meta fields and REST endpoint
@@ -218,11 +216,11 @@ odiseiaframework/
 │   ├── odiseia-list/
 │   ├── odiseia-list-item/
 │   ├── wallpaper-fixed/
-│   └── Plugins/            # Editor extensions (seo.js, aos.js, responsive*.js)
+│   └── Plugins/            # Editor extensions (seo.js, aos.js)
 │       └── seo/            # SEO helpers imported by seo.js (checks, content analysis, tests); not entries
 ├── build/                  # Compiled output (generated)
 ├── templates/              # Admin page templates (options, gallery)
-├── assets/                 # Admin styles/scripts, front-end CSS, logo
+├── assets/                 # Admin styles/scripts, logo
 ├── core/                   # Optional site-specific PHP, auto-loaded, git-ignored
 ├── create-block.js         # Block scaffolding script
 └── webpack.config.js       # Extends the @wordpress/scripts config with src/Plugins entries
@@ -237,7 +235,6 @@ odiseiaframework/
 | `IA_features\Seo` | AI SEO feature. |
 | `Blocks` | Registers the bundled blocks and adds the OdiseIa Blocks admin page. |
 | `Config` | Reads the `odiseia` option. Enables SVG uploads and AOS when toggled, adds `align-wide` support, and loads `core/*.php`. |
-| `Ponder` | Extends core blocks. It enqueues `build/Plugins/responsive.js` in the editor and `assets/responsive.css` on the editor and front end. |
 | `Odiseia_Options` | Plugin options page. |
 
 The autoloader maps `odiseIAFramework\Some\Class_Name` to `includes/some/class_name.php`. It removes the namespace prefix, turns `\` into `/`, and lowercases the whole path. New classes must follow that file naming.
@@ -279,7 +276,6 @@ Goal: site owners open the gallery in wp-admin and install or uninstall (enable 
 
 ### Also in progress
 
-- [ ] Responsive controls for core blocks. `src/Plugins/responsive.js` is empty. `responsiveSpacing.js` is built but not enqueued (the enqueue call is commented out in `includes/ponder.php`). `testresponsive.js` is a prototype for Columns and Separator, and is built but not enqueued.
 - [ ] Make `add-block` output build-ready and auto-registered (see the checklist in [Adding a block](#adding-a-block)).
 
 ## License
