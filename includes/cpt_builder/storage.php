@@ -63,6 +63,19 @@ class Storage
     private static $allow_permanent_delete = false;
 
     /**
+     * Per-request memoization of all(), keyed by its $include_trash argument ('0' or '1'), so
+     * that Registrar::register_all(), Variations::filter_query_variations(), and
+     * Cpt_Builder::enqueue_fields_panel_assets() — which all call all(false) on every request —
+     * share a single find_all() + JSON-decode pass instead of repeating it 2-3x per request.
+     * Cleared by invalidate_cache() on every write (save/pause/resume/trash/restore/
+     * delete_permanently), so a change is always visible to the very next all() call, including
+     * later in the same request.
+     *
+     * @var array<string, array<string, array{post_id: int, status: string, definition: array}>>
+     */
+    private static $cache = [];
+
+    /**
      * Registers the private storage post type. Called once from Cpt_Builder::init().
      */
     public static function register_post_type()
@@ -107,6 +120,11 @@ class Storage
      */
     public static function all($include_trash = false)
     {
+        $cache_key = $include_trash ? '1' : '0';
+        if (isset(self::$cache[$cache_key])) {
+            return self::$cache[$cache_key];
+        }
+
         $statuses = $include_trash ? ['publish', 'draft', 'trash'] : ['publish', 'draft'];
 
         $by_slug = [];
@@ -114,7 +132,20 @@ class Storage
             $by_slug[$entry['definition']['slug']] = $entry;
         }
 
+        self::$cache[$cache_key] = $by_slug;
+
         return $by_slug;
+    }
+
+    /**
+     * Clears all()'s per-request memoization. Called by every write path (save/pause/resume/
+     * trash/restore/delete_permanently) so a change made mid-request — e.g. the REST controller
+     * saving a definition and then re-reading the list for its response — is never served a
+     * stale cached copy.
+     */
+    private static function invalidate_cache()
+    {
+        self::$cache = [];
     }
 
     /**
@@ -179,6 +210,7 @@ class Storage
         update_post_meta($result, self::META_KEY, wp_slash(wp_json_encode($definition)));
 
         update_option(self::FLUSH_OPTION, 1);
+        self::invalidate_cache();
 
         return $result;
     }
@@ -279,6 +311,7 @@ class Storage
 
         wp_update_post(['ID' => $entry['post_id'], 'post_status' => 'trash'], true);
         update_option(self::FLUSH_OPTION, 1);
+        self::invalidate_cache();
 
         return ['ok' => true, 'remaining' => 0, 'done' => true];
     }
@@ -340,6 +373,7 @@ class Storage
 
         wp_update_post(['ID' => $entry['post_id'], 'post_status' => 'draft'], true);
         update_option(self::FLUSH_OPTION, 1);
+        self::invalidate_cache();
 
         return ['ok' => true, 'remaining' => 0, 'done' => true];
     }
@@ -437,6 +471,7 @@ class Storage
         } finally {
             self::$allow_permanent_delete = false;
         }
+        self::invalidate_cache();
 
         return ['ok' => true, 'remaining' => 0, 'done' => true];
     }
@@ -595,6 +630,7 @@ class Storage
 
         wp_update_post(['ID' => $entry['post_id'], 'post_status' => $to], true);
         update_option(self::FLUSH_OPTION, 1);
+        self::invalidate_cache();
 
         return ['ok' => true];
     }
