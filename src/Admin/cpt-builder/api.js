@@ -84,10 +84,12 @@ export function trashDefinition(slug, confirm) {
 }
 
 /**
- * POST /definitions/{slug}/restore — undoes trashDefinition(), back to paused.
+ * POST /definitions/{slug}/restore — undoes trashDefinition(), back to paused. Batched
+ * server-side, same as trashDefinition()/deleteDefinitionPermanently(): call again while the
+ * response's `done` is false.
  *
  * @param {string} slug
- * @return {Promise<Object>}
+ * @return {Promise<{remaining: number, done: boolean}>}
  */
 export function restoreDefinition(slug) {
     return apiFetch({ path: `/${restNamespace}/definitions/${slug}/restore`, method: 'POST' });

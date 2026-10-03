@@ -10,6 +10,7 @@ import { __, sprintf } from '@wordpress/i18n';
  */
 import { deleteDefinitionPermanently, fetchUsage, restoreDefinition, trashDefinition } from './api';
 import { isConfirmRequired, isConfirmSatisfied } from './confirm';
+import { mapServerErrors } from './error-map';
 
 /**
  * Two-step delete dialog, opened from LifecycleActions. Step 1 trashes the CPT's own content
@@ -17,16 +18,16 @@ import { isConfirmRequired, isConfirmSatisfied } from './confirm';
  * trashed) permanently removes the trashed content posts and the definition
  * (Storage::delete_permanently()) — irreversible.
  *
- * GET /definitions never returns a trashed definition (see Rest_Controller::get_items(): trashed
- * ones are reached only by slug), so the list has no way to show this same row again once step 1
- * finishes. This dialog therefore stays open and tracks its own `status` across both steps
- * instead of closing after step 1 — Restore (Storage::restore()) is offered right here as the
- * escape hatch before committing to step 2, and the list only reloads (via onChanged) once the
- * dialog actually closes.
+ * GET /definitions now returns trashed definitions too (see Rest_Controller::get_items()), and
+ * DefinitionList renders them in their own "Trash" section, so `onChanged` is called as soon as
+ * each step finishes (including step 1) to keep that section in sync. This dialog still stays
+ * open and tracks its own `status` across both steps instead of closing after step 1 — Restore
+ * (Storage::restore()) is offered right here as the escape hatch before committing to step 2 —
+ * and only closes itself once step 2 (or Restore) actually completes.
  *
- * Both delete steps are batched server-side: a large CPT may need more than one request per
- * click, so this component keeps calling the same action while the response's `done` is false,
- * showing how many posts are left in between.
+ * Every lifecycle step (trash, restore, permanent delete) is batched server-side: a large CPT
+ * may need more than one request per click, so this component keeps calling the same action
+ * while the response's `done` is false, showing how many posts are left in between.
  *
  * @param {Object}   props
  * @param {Object}   props.entry     Entry being deleted (slug, status).
@@ -60,7 +61,8 @@ export default function DeleteDialog({ entry, onClose, onChanged }) {
     const confirmOk = isConfirmSatisfied(confirmText, entry.slug, postCount);
 
     const handleError = (err) => {
-        setError(err?.message || __('The action could not be completed.', 'odiseiaframework'));
+        const mapped = mapServerErrors(err?.data?.errors).slug;
+        setError(mapped || err?.message || __('The action could not be completed.', 'odiseiaframework'));
     };
 
     const runTrashStep = () => {
@@ -110,19 +112,36 @@ export default function DeleteDialog({ entry, onClose, onChanged }) {
     const handleRestore = () => {
         setError(null);
         setIsBusy(true);
-        restoreDefinition(entry.slug)
-            .then(() => {
-                onChanged();
-                onClose();
-            })
-            .catch(handleError)
-            .finally(() => setIsBusy(false));
+
+        const step = () =>
+            restoreDefinition(entry.slug)
+                .then((result) => {
+                    if (result.done) {
+                        setRemaining(null);
+                        onChanged();
+                        onClose();
+                        return;
+                    }
+                    setRemaining(result.remaining);
+                    return step();
+                })
+                .catch(handleError)
+                .finally(() => setIsBusy(false));
+
+        return step();
     };
 
     return (
         <Modal
             title={isTrashed ? __('Permanently Delete', 'odiseiaframework') : __('Move to Trash', 'odiseiaframework')}
-            onRequestClose={onClose}
+            onRequestClose={() => {
+                if (!isBusy) {
+                    onClose();
+                }
+            }}
+            isDismissible={!isBusy}
+            shouldCloseOnEsc={!isBusy}
+            shouldCloseOnClickOutside={!isBusy}
         >
             {error && (
                 <Notice status="error" onRemove={() => setError(null)}>
