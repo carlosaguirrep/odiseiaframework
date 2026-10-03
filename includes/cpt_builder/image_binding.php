@@ -18,6 +18,17 @@ class Image_Binding
     const SOURCE_NAME = 'odiseia/attachment';
 
     /**
+     * Per-request cache of resolved `url`/`alt` pairs, keyed by attachment ID, so a Query Loop
+     * rendering N posts that share (or repeat) the same attachment resolves it once instead of
+     * calling wp_get_attachment_image_url()/get_post_meta() again for every attribute of every
+     * loop item. Cleared only by process lifetime (there is no write path here to invalidate on:
+     * this source only reads).
+     *
+     * @var array<int, array{url: string|false, alt: string}>
+     */
+    private static $cache = [];
+
+    /**
      * Registers the source. Called directly from Cpt_Builder::init() (already an `init` callback
      * — see register_block_bindings_source()'s own docblock), not wrapped in another add_action(),
      * since `init` has already started firing by the time Cpt_Builder::init() runs.
@@ -70,20 +81,54 @@ class Image_Binding
         }
 
         $attachment_id = absint(get_post_meta($post_id, $source_args['key'], true));
-        if (! $attachment_id || 'attachment' !== get_post_type($attachment_id) || ! wp_attachment_is_image($attachment_id)) {
+        if (! $attachment_id) {
+            return null;
+        }
+
+        $resolved = self::resolve($attachment_id);
+        if (null === $resolved) {
             return null;
         }
 
         if ('alt' === $attribute_name) {
-            return get_post_meta($attachment_id, '_wp_attachment_image_alt', true);
+            return $resolved['alt'];
         }
 
         if ('url' === $attribute_name) {
-            $url = wp_get_attachment_image_url($attachment_id, 'full');
-
-            return false !== $url ? $url : null;
+            return false !== $resolved['url'] ? $resolved['url'] : null;
         }
 
         return null;
+    }
+
+    /**
+     * Resolves (and memoizes) one attachment's `url`/`alt` pair, or null when it is not an
+     * image attachment. Split out of get_value() so repeated lookups of the SAME attachment ID
+     * — the common case in a Query Loop, where many posts can point at the same image, or the
+     * same post is rendered once per attribute (`id`/`url`/`alt`) — resolve it only once per
+     * request instead of re-querying wp_attachment_is_image()/get_post_meta()/
+     * wp_get_attachment_image_url() every time (judgment-day N+1 finding).
+     *
+     * @param int $attachment_id Attachment post ID.
+     * @return array{url: string|false, alt: string}|null
+     */
+    private static function resolve($attachment_id)
+    {
+        if (array_key_exists($attachment_id, self::$cache)) {
+            return self::$cache[$attachment_id];
+        }
+
+        if ('attachment' !== get_post_type($attachment_id) || ! wp_attachment_is_image($attachment_id)) {
+            self::$cache[$attachment_id] = null;
+
+            return null;
+        }
+
+        self::$cache[$attachment_id] = [
+            'url' => wp_get_attachment_image_url($attachment_id, 'full'),
+            'alt' => get_post_meta($attachment_id, '_wp_attachment_image_alt', true),
+        ];
+
+        return self::$cache[$attachment_id];
     }
 }
