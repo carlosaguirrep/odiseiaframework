@@ -51,6 +51,15 @@ function CptField({ field, value, onChange }) {
                         )}
                     />
                 </MediaUploadCheck>
+                {controlValue ? (
+                    <Button
+                        onClick={() => onChange(toMetaValue(field.type, 0))}
+                        variant="tertiary"
+                        isDestructive
+                    >
+                        {__('Remove image', 'odiseiaframework')}
+                    </Button>
+                ) : null}
             </PanelRow>
         );
     }
@@ -106,15 +115,16 @@ registerPlugin('odiseia-cpt-fields', { render: CptFieldsPanel });
 /**
  * Client-side counterpart of Image_Binding::register_source() (PHP): lets the EDITOR preview an
  * image field's bound `url`/`alt` while editing a Query Loop template, instead of showing the
- * static placeholder until the page is saved and reloaded. Read-only (`canUserEditValue: false`
- * — editing happens through the "CPT Fields" panel above, or the image field's own meta, not
- * inline on the bound attribute), and intentionally silent (returns {}) whenever the attachment
- * or its media record is not yet available, so a transient resolver miss never throws.
+ * static placeholder until the page is saved and reloaded. Read-only — editing happens through
+ * the "CPT Fields" panel above, or the image field's own meta, not inline on the bound attribute
+ * — simply because this source defines no `setValues` callback; the block editor only allows
+ * editing a bound attribute when a source provides one. Intentionally silent (returns {})
+ * whenever the attachment or its entity record is not yet available, so a transient resolver
+ * miss never throws.
  */
 registerBlockBindingsSource({
     name: BINDING_SOURCE_NAME,
     usesContext: ['postId', 'postType'],
-    canUserEditValue: () => false,
     getValues({ select, context, bindings }) {
         const values = {};
         const { postId, postType } = context || {};
@@ -132,15 +142,20 @@ registerBlockBindingsSource({
                 return;
             }
 
-            const media = select(coreStore).getMedia(attachmentId);
-            if (!media) {
+            // getMedia() was deprecated in favor of the generic entity-record selector and is
+            // gone entirely from the core-data bundled with this WordPress version (confirmed:
+            // no longer present in wp-includes/js/dist/core-data.js) — calling it here would
+            // throw. Same underlying REST resource (wp/v2/media), accessed as the `attachment`
+            // post type entity instead.
+            const attachment = select(coreStore).getEntityRecord('postType', 'attachment', attachmentId);
+            if (!attachment) {
                 return;
             }
 
             if ('url' === attributeName) {
-                values.url = media.source_url;
+                values.url = attachment.source_url;
             } else if ('alt' === attributeName) {
-                values.alt = media.alt_text;
+                values.alt = attachment.alt_text;
             }
         });
 
