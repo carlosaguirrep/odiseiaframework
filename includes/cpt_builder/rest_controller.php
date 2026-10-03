@@ -45,6 +45,60 @@ class Rest_Controller
                 'callback'            => [self::class, 'update_item'],
                 'permission_callback' => [self::class, 'permissions_check'],
             ],
+            [
+                // Step 2 of the two-step delete, only valid once trash() completed step 1 (see
+                // Storage::delete_permanently()). Query params only: `force=1` (explicit, so a
+                // bare DELETE can never accidentally destroy data) and `confirm` (typed slug,
+                // required when trashed content posts exist).
+                'methods'             => 'DELETE',
+                'callback'            => [self::class, 'delete_item'],
+                'permission_callback' => [self::class, 'permissions_check'],
+            ],
+        ]);
+
+        register_rest_route(self::NAMESPACE_V1, '/definitions/(?P<slug>[a-z][a-z0-9_-]*)/pause', [
+            [
+                'methods'             => 'POST',
+                'callback'            => [self::class, 'pause_item'],
+                'permission_callback' => [self::class, 'permissions_check'],
+            ],
+        ]);
+
+        register_rest_route(self::NAMESPACE_V1, '/definitions/(?P<slug>[a-z][a-z0-9_-]*)/resume', [
+            [
+                'methods'             => 'POST',
+                'callback'            => [self::class, 'resume_item'],
+                'permission_callback' => [self::class, 'permissions_check'],
+            ],
+        ]);
+
+        register_rest_route(self::NAMESPACE_V1, '/definitions/(?P<slug>[a-z][a-z0-9_-]*)/trash', [
+            [
+                // Step 1 of the two-step delete. Body: {confirm}, required when content posts
+                // exist. Batched (see Storage::trash()): call again while the response's
+                // `done` is false.
+                'methods'             => 'POST',
+                'callback'            => [self::class, 'trash_item'],
+                'permission_callback' => [self::class, 'permissions_check'],
+            ],
+        ]);
+
+        register_rest_route(self::NAMESPACE_V1, '/definitions/(?P<slug>[a-z][a-z0-9_-]*)/restore', [
+            [
+                // Undoes trash(). Batched (see Storage::restore()): call again while the
+                // response's `done` is false.
+                'methods'             => 'POST',
+                'callback'            => [self::class, 'restore_item'],
+                'permission_callback' => [self::class, 'permissions_check'],
+            ],
+        ]);
+
+        register_rest_route(self::NAMESPACE_V1, '/usage', [
+            [
+                'methods'             => 'GET',
+                'callback'            => [self::class, 'get_usage'],
+                'permission_callback' => [self::class, 'permissions_check'],
+            ],
         ]);
     }
 
@@ -67,14 +121,14 @@ class Rest_Controller
     }
 
     /**
-     * GET /definitions — active and paused definitions (trashed definitions are reached only by
-     * slug, via get_item(), since they are pending permanent delete).
+     * GET /definitions — every stored definition, including trashed ones (pending permanent
+     * delete): the admin list is their only way back to Restore or step 2 of the delete flow.
      *
      * @return \WP_REST_Response
      */
     public static function get_items()
     {
-        return rest_ensure_response(array_values(array_map([self::class, 'format_entry'], Storage::all())));
+        return rest_ensure_response(array_values(array_map([self::class, 'format_entry'], Storage::all(true))));
     }
 
     /**
@@ -136,6 +190,13 @@ class Rest_Controller
         if (null === $entry) {
             return self::not_found_error();
         }
+        // A trashed definition is pending permanent delete (see Storage::delete_permanently()):
+        // editing it would silently resurrect a new 'draft'/'publish' definition for a slug the
+        // developer already asked to remove. Restore it first (Storage::restore()) if it should
+        // keep being edited.
+        if ('trash' === $entry['status']) {
+            return self::trashed_error();
+        }
 
         $definition         = Definition::normalize((array) $request->get_json_params());
         $definition['slug'] = $slug;
@@ -155,6 +216,139 @@ class Rest_Controller
             'status'     => $entry['status'],
             'definition' => $definition,
         ]));
+    }
+
+    /**
+     * POST /definitions/{slug}/pause
+     *
+     * @param WP_REST_Request $request Request with a `slug` URL parameter.
+     * @return \WP_REST_Response|WP_Error
+     */
+    public static function pause_item(WP_REST_Request $request)
+    {
+        return self::lifecycle_response(Storage::pause(self::url_slug($request)));
+    }
+
+    /**
+     * POST /definitions/{slug}/resume
+     *
+     * @param WP_REST_Request $request Request with a `slug` URL parameter.
+     * @return \WP_REST_Response|WP_Error
+     */
+    public static function resume_item(WP_REST_Request $request)
+    {
+        return self::lifecycle_response(Storage::resume(self::url_slug($request)));
+    }
+
+    /**
+     * POST /definitions/{slug}/trash — step 1 of the two-step delete.
+     *
+     * @param WP_REST_Request $request Request with a `slug` URL parameter and a JSON
+     *                                 `{confirm}` body.
+     * @return \WP_REST_Response|WP_Error
+     */
+    public static function trash_item(WP_REST_Request $request)
+    {
+        $confirm = (string) $request->get_param('confirm');
+
+        return self::lifecycle_response(Storage::trash(self::url_slug($request), $confirm));
+    }
+
+    /**
+     * POST /definitions/{slug}/restore — undoes trash(). Batched (see Storage::restore()): call
+     * again while the response's `done` is false.
+     *
+     * @param WP_REST_Request $request Request with a `slug` URL parameter.
+     * @return \WP_REST_Response|WP_Error
+     */
+    public static function restore_item(WP_REST_Request $request)
+    {
+        return self::lifecycle_response(Storage::restore(self::url_slug($request)));
+    }
+
+    /**
+     * DELETE /definitions/{slug}?force=1&confirm=... — step 2 of the two-step delete. `force`
+     * and `confirm` are read from the query string, not get_param(), for the same reason the
+     * slug is read from get_url_params() (see url_slug()): a DELETE request has no JSON body to
+     * shadow them, but being explicit keeps every route reading each parameter from one place.
+     *
+     * @param WP_REST_Request $request Request with a `slug` URL parameter.
+     * @return \WP_REST_Response|WP_Error
+     */
+    public static function delete_item(WP_REST_Request $request)
+    {
+        $query = $request->get_query_params();
+
+        if (empty($query['force'])) {
+            return new WP_Error(
+                'odiseia_cpt_force_required',
+                __('Pass force=1 to permanently delete.', 'odiseiaframework'),
+                ['status' => 400]
+            );
+        }
+
+        $confirm = isset($query['confirm']) ? (string) $query['confirm'] : '';
+
+        return self::lifecycle_response(Storage::delete_permanently(self::url_slug($request), $confirm));
+    }
+
+    /**
+     * GET /usage — content-post counts per stored definition, for the list view and the delete
+     * confirmation dialog.
+     *
+     * @return \WP_REST_Response
+     */
+    public static function get_usage()
+    {
+        return rest_ensure_response(Storage::usage_all());
+    }
+
+    /**
+     * Converts a Storage lifecycle result (see Storage::pause() and friends) into a REST
+     * response, so each handler above stays a one-liner.
+     *
+     * @param array{ok: bool, code?: string, remaining?: int, done?: bool} $result
+     * @return \WP_REST_Response|WP_Error
+     */
+    private static function lifecycle_response(array $result)
+    {
+        if (empty($result['ok'])) {
+            return self::lifecycle_error(isset($result['code']) ? $result['code'] : '');
+        }
+
+        unset($result['ok']);
+
+        return rest_ensure_response(empty($result) ? ['ok' => true] : $result);
+    }
+
+    /**
+     * @param string $code One of Storage's lifecycle error codes.
+     * @return WP_Error
+     */
+    private static function lifecycle_error($code)
+    {
+        $errors = [
+            'not_found'        => ['odiseia_cpt_not_found', __('Definition not found.', 'odiseiaframework'), 404],
+            'invalid_state'    => ['odiseia_cpt_invalid_state', __('This action is not allowed in the current state.', 'odiseiaframework'), 409],
+            'already_trashed'  => ['odiseia_cpt_invalid_state', __('This definition is already trashed.', 'odiseiaframework'), 409],
+            'trash_disabled'   => ['odiseia_cpt_trash_disabled', __('The trash is disabled on this site; permanent delete only.', 'odiseiaframework'), 409],
+            'confirm_mismatch' => ['odiseia_cpt_confirm_mismatch', __('Type the slug exactly to confirm.', 'odiseiaframework'), 400],
+            'collision'        => ['odiseia_cpt_collision', __('This post type is managed by another plugin or theme; this action cannot continue.', 'odiseiaframework'), 409],
+            'stuck'            => ['odiseia_cpt_stuck', __('One or more posts could not be processed. Check for something blocking deletion and try again.', 'odiseiaframework'), 409],
+        ];
+
+        [$wp_code, $message, $status] = isset($errors[$code])
+            ? $errors[$code]
+            : ['odiseia_cpt_error', __('Could not complete the action.', 'odiseiaframework'), 400];
+
+        $data = ['status' => $status];
+        if ('confirm_mismatch' === $code) {
+            $data['errors'] = [['path' => 'confirm', 'code' => 'mismatch']];
+        } elseif (in_array($code, ['collision', 'stuck'], true)) {
+            $data['errors'] = [['path' => 'slug', 'code' => $code]];
+        }
+
+        return new WP_Error($wp_code, $message, $data);
     }
 
     /**
@@ -223,6 +417,20 @@ class Rest_Controller
             'odiseia_cpt_conflict',
             __('This slug is already used by another definition.', 'odiseiaframework'),
             ['status' => 409]
+        );
+    }
+
+    /**
+     * @return WP_Error 409 "this definition is trashed" error, in the same {path, code} shape as
+     *                  the other lifecycle codes (see Rest_Controller::lifecycle_error()), for
+     *                  PUT /definitions/{slug} on an already-trashed definition.
+     */
+    private static function trashed_error()
+    {
+        return new WP_Error(
+            'odiseia_cpt_trashed',
+            __('This definition is trashed; restore it before editing.', 'odiseiaframework'),
+            ['status' => 409, 'errors' => [['path' => 'slug', 'code' => 'trashed']]]
         );
     }
 }
