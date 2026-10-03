@@ -155,10 +155,10 @@ class Definition
             $errors[] = ['path' => 'slug', 'code' => 'conflict'];
         }
 
-        if (empty($definition['labels']['singular'])) {
+        if ('' === trim((string) ($definition['labels']['singular'] ?? ''))) {
             $errors[] = ['path' => 'labels.singular', 'code' => 'required'];
         }
-        if (empty($definition['labels']['plural'])) {
+        if ('' === trim((string) ($definition['labels']['plural'] ?? ''))) {
             $errors[] = ['path' => 'labels.plural', 'code' => 'required'];
         }
 
@@ -181,7 +181,7 @@ class Definition
                 $seen_keys[$key] = true;
             }
 
-            if (empty($field['label'])) {
+            if ('' === trim((string) ($field['label'] ?? ''))) {
                 $errors[] = ['path' => "$path.label", 'code' => 'required'];
             }
 
