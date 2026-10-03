@@ -199,6 +199,21 @@ Both builds come from one toolchain: `webpack.config.js` extends the default `@w
 
 > **Always run `npm run build` before committing.** `build/` is committed, and `npm run start` writes development output (unminified, with source maps) into it.
 
+### WP-CLI smoke scripts
+
+PHP has no automated test runner in this plugin, so PHP-only features (e.g. CPT Builder storage and registration) ship a WP-CLI smoke script instead. These live in `tests/` and are **not** shipped in the plugin zip (see `package.json` → `files`).
+
+```bash
+# Run the CPT Builder slice 1 (storage + registration) assertions; cleans up after itself
+ddev exec wp eval-file wp-content/plugins/odiseiaframework/tests/smoke/cpt-builder-slice1.php
+
+# Create a sample "Demo Listing" CPT (odiseia_demo) and leave it active for a manual look in wp-admin
+ddev exec wp eval-file wp-content/plugins/odiseiaframework/tests/smoke/cpt-builder-slice1.php demo
+
+# Remove the demo definition and any posts of that type
+ddev exec wp eval-file wp-content/plugins/odiseiaframework/tests/smoke/cpt-builder-slice1.php cleanup
+```
+
 ### Project structure
 
 ```text
