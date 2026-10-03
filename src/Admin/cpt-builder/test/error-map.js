@@ -30,6 +30,7 @@ describe('mapServerErrors', () => {
             'conflict',
             'collision',
             'stuck',
+            'trashed',
         ];
         const messages = codes.map((code) => mapServerErrors([{ path: 'slug', code }]).slug);
 
@@ -53,6 +54,16 @@ describe('mapServerErrors', () => {
 
         expect(map.slug).toEqual(expect.any(String));
         expect(map.slug.length).toBeGreaterThan(0);
+    });
+
+    it('maps the lifecycle trashed code to a non-generic message', () => {
+        // See Rest_Controller::update_item(): PUT on an already-trashed definition is rejected
+        // with this code instead of silently resurrecting it.
+        const map = mapServerErrors([{ path: 'slug', code: 'trashed' }]);
+
+        expect(map.slug).toEqual(expect.any(String));
+        expect(map.slug.length).toBeGreaterThan(0);
+        expect(map.slug).not.toEqual('This field is invalid.');
     });
 
     it('maps a fields.N.key/label/type path using the row-level message set', () => {

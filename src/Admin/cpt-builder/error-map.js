@@ -30,6 +30,12 @@ const TOP_LEVEL_MESSAGES = {
             'One or more posts could not be processed. Check for something blocking deletion and try again.',
             'odiseiaframework'
         ),
+        // Returned by PUT /definitions/{slug} (see Rest_Controller::update_item()) when the
+        // definition is already trashed and pending permanent delete.
+        trashed: __(
+            'This definition is trashed; restore it before editing.',
+            'odiseiaframework'
+        ),
     },
     'labels.singular': {
         required: __('Singular label is required.', 'odiseiaframework'),

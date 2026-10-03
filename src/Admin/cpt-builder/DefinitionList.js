@@ -87,9 +87,11 @@ function DefinitionTable({ entries, onEdit, onChanged }) {
                         <td>{statusLabel(entry.status)}</td>
                         <td>{entry.definition.fields.length}</td>
                         <td>
-                            <Button variant="secondary" onClick={() => onEdit(entry)}>
-                                {__('Edit', 'odiseiaframework')}
-                            </Button>
+                            {'trash' !== entry.status && (
+                                <Button variant="secondary" onClick={() => onEdit(entry)}>
+                                    {__('Edit', 'odiseiaframework')}
+                                </Button>
+                            )}
                             <LifecycleActions entry={entry} onChanged={onChanged} />
                         </td>
                     </tr>
