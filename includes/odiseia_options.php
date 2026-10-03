@@ -171,16 +171,6 @@ class Odiseia_Options
         // );
 
 
-        // add_settings_field(
-        //     'odiseia_cpt_creator', 
-        //     'CPT Creator', 
-        //     [__CLASS__, 'odiseia_switch_callback'], 
-        //     'odiseiaframework', 
-        //     'modules',
-        //     ['option_name' => 'odiseia_cpt_creator']
-        // );
-
-
     }
 
     public static function odiseia_section_modules()
