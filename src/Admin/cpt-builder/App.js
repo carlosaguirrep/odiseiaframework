@@ -9,15 +9,8 @@ import { __ } from '@wordpress/i18n';
  * Internal dependencies
  */
 import { fetchDefinitions } from './api';
+import DefinitionForm from './DefinitionForm';
 import DefinitionList from './DefinitionList';
-
-// Placeholder until the create/edit form (DefinitionForm) lands: lets "Add New"/"Edit" return to
-// the list instead of rendering a blank view.
-const DefinitionForm = ({ onCancel }) => (
-    <Notice status="info" onRemove={onCancel}>
-        {__('The create/edit form is not available yet.', 'odiseiaframework')}
-    </Notice>
-);
 
 const VIEW_LIST = 'list';
 const VIEW_CREATE = 'create';
