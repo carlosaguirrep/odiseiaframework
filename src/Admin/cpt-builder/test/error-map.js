@@ -22,10 +22,48 @@ describe('mapServerErrors', () => {
     });
 
     it('gives a different message per slug error code', () => {
-        const codes = ['invalid_format', 'too_long', 'reserved_prefix', 'reserved', 'conflict'];
+        const codes = [
+            'invalid_format',
+            'too_long',
+            'reserved_prefix',
+            'reserved',
+            'conflict',
+            'collision',
+            'stuck',
+            'trashed',
+        ];
         const messages = codes.map((code) => mapServerErrors([{ path: 'slug', code }]).slug);
 
         expect(new Set(messages).size).toBe(codes.length);
+    });
+
+    it('maps the lifecycle collision code to a non-generic message', () => {
+        // See Storage::is_foreign_owned() in includes/cpt_builder/storage.php: trash()/
+        // delete_permanently() refuse with this code when the slug is actually owned by a
+        // foreign plugin/theme registration.
+        const map = mapServerErrors([{ path: 'slug', code: 'collision' }]);
+
+        expect(map.slug).toEqual(expect.any(String));
+        expect(map.slug.length).toBeGreaterThan(0);
+    });
+
+    it('maps the lifecycle stuck code to a non-generic message', () => {
+        // See Storage::trash()/delete_permanently(): this code is returned when a batch makes
+        // zero progress instead of looping "Working..." forever.
+        const map = mapServerErrors([{ path: 'slug', code: 'stuck' }]);
+
+        expect(map.slug).toEqual(expect.any(String));
+        expect(map.slug.length).toBeGreaterThan(0);
+    });
+
+    it('maps the lifecycle trashed code to a non-generic message', () => {
+        // See Rest_Controller::update_item(): PUT on an already-trashed definition is rejected
+        // with this code instead of silently resurrecting it.
+        const map = mapServerErrors([{ path: 'slug', code: 'trashed' }]);
+
+        expect(map.slug).toEqual(expect.any(String));
+        expect(map.slug.length).toBeGreaterThan(0);
+        expect(map.slug).not.toEqual('This field is invalid.');
     });
 
     it('maps a fields.N.key/label/type path using the row-level message set', () => {

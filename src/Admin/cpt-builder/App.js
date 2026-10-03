@@ -95,6 +95,7 @@ export default function App() {
                     isLoading={isLoading}
                     onCreate={handleCreate}
                     onEdit={handleEdit}
+                    onChanged={loadDefinitions}
                 />
             )}
 
