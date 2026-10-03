@@ -39,34 +39,41 @@ class Cpt_Builder
     }
 
     /**
-     * Enqueues the "CPT Fields" editor panel (src/Plugins/cpt-fields.js) and localizes each
-     * active CPT's field schema, so the panel can render the right control per field without any
-     * extra REST round-trip — the editor already loads the CURRENT post's own meta values via
-     * core-data, since every field's meta is registered with `show_in_rest => true` (see
-     * Registrar::register_one()). Only field metadata (key/label/type) is localized here, never
-     * meta VALUES: those stay gated by core's own per-post `read_post`/`edit_post` checks.
+     * Enqueues the "CPT Fields" editor panel (src/Plugins/cpt-fields.js) and localizes the
+     * CURRENT screen's own CPT field schema, so the panel can render the right control per field
+     * without any extra REST round-trip — the editor already loads the CURRENT post's own meta
+     * values via core-data, since every field's meta is registered with `show_in_rest => true`
+     * (see Registrar::register_one()). Only field metadata (key/label/type) is localized here,
+     * never meta VALUES: those stay gated by core's own per-post `read_post`/`edit_post` checks.
+     *
+     * Gated by `get_current_screen()->post_type` (set for every post.php/post-new.php screen —
+     * see WP_Screen::get()) instead of localizing every active CPT's fields on every editor
+     * screen: this callback used to run (and enqueue the script, and localize every CPT) on
+     * every single post/page/CPT edit screen site-wide, not just the ones that are actually one
+     * of our active CPTs, which is both needless asset weight and an unbounded localized payload
+     * as more CPTs are defined.
      */
     public static function enqueue_fields_panel_assets()
     {
-        $fields = [];
-        foreach (Storage::all() as $slug => $entry) {
-            if ('publish' !== $entry['status']) {
-                continue; // Not registered — nothing to edit.
-            }
-
-            $fields[$slug] = array_map(static function ($field) {
-                return ['key' => $field['key'], 'label' => $field['label'], 'type' => $field['type']];
-            }, $entry['definition']['fields']);
-        }
-
-        if (empty($fields)) {
+        $screen = function_exists('get_current_screen') ? get_current_screen() : null;
+        $post_type = $screen ? $screen->post_type : '';
+        if (empty($post_type)) {
             return;
         }
+
+        $entry = Storage::all()[$post_type] ?? null;
+        if (null === $entry || 'publish' !== $entry['status'] || empty($entry['definition']['fields'])) {
+            return; // Not one of our active CPTs, or it has no fields to edit.
+        }
+
+        $fields = array_map(static function ($field) {
+            return ['key' => $field['key'], 'label' => $field['label'], 'type' => $field['type']];
+        }, $entry['definition']['fields']);
 
         if (\odiseIAFramework\Assets::enqueue_plugin_script('odiseiaframework-cpt-fields', 'cpt-fields')) {
             wp_add_inline_script(
                 'odiseiaframework-cpt-fields',
-                'window.odiseiaCptFieldsSettings = ' . wp_json_encode(['fields' => $fields]) . ';',
+                'window.odiseiaCptFieldsSettings = ' . wp_json_encode(['fields' => [$post_type => $fields]]) . ';',
                 'before'
             );
         }
