@@ -11,6 +11,10 @@
 
 export const FIELD_TYPES = ['text', 'number', 'date', 'url', 'image'];
 
+// Mirrors Definition::ALLOWED_TAXONOMIES — the only taxonomies a definition may associate with
+// its CPT (see payload.js, which filters the form's checkbox state against this list).
+export const ALLOWED_TAXONOMIES = ['category', 'post_tag'];
+
 const SLUG_PATTERN = /^[a-z][a-z0-9_-]*$/;
 const FIELD_KEY_PATTERN = /^[a-z][a-z0-9_]{0,39}$/;
 
