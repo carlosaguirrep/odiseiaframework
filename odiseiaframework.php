@@ -29,5 +29,6 @@ function odiseiaframework_init() {
     \odiseIAFramework\Blocks::init();
     \odiseIAFramework\Config::init();
     \odiseIAFramework\Odiseia_Options::init();
+    \odiseIAFramework\Cpt_Builder\Cpt_Builder::init();
 }
 add_action( 'init', 'odiseiaframework_init' );
