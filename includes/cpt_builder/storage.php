@@ -18,6 +18,16 @@ class Storage
     const META_KEY = '_odiseia_cpt_definition';
 
     /**
+     * Post meta set on a content post by trash() (value: the owning definition's slug) and
+     * cleared by restore(). guard_scheduled_delete() blocks permanent deletion of exactly the
+     * posts carrying this flag (plus a trashed `odiseia_cpt_def` post itself) instead of
+     * matching on post_type/slug, so a foreign plugin/theme that later registers the same slug
+     * can still manage (and permanently delete) its own posts without being blocked by a
+     * same-named definition we have in the trash.
+     */
+    const META_TRASHED_FLAG = '_odiseia_lifecycle_trashed';
+
+    /**
      * Option flagging that rewrite rules need a flush after a definition changed. Cleared and
      * applied on `wp_loaded`, see Cpt_Builder::maybe_flush_rewrite_rules().
      */
@@ -205,22 +215,25 @@ class Storage
             return ['ok' => false, 'code' => 'trash_disabled'];
         }
 
-        $content_count = self::usage($slug)['content'];
-        if ($content_count > 0 && $confirm !== $slug) {
+        $before = self::usage($slug)['content'];
+        if ($before > 0 && $confirm !== $slug) {
             return ['ok' => false, 'code' => 'confirm_mismatch'];
         }
 
-        $post_ids   = self::content_post_ids($slug, $batch_size);
-        $progressed = false;
+        $post_ids = self::content_post_ids($slug, $batch_size);
         foreach ($post_ids as $post_id) {
             if (wp_trash_post($post_id)) {
-                $progressed = true;
+                update_post_meta($post_id, self::META_TRASHED_FLAG, $slug);
             }
         }
 
+        // Progress is measured by the remaining count, not by wp_trash_post()'s return value:
+        // it returns false for a post that is already trashed, which a duplicate/concurrent
+        // request would otherwise misreport as 'stuck' even though the batch is making progress
+        // (see judgment-day finding F).
         $remaining = self::usage($slug)['content'];
         if ($remaining > 0) {
-            if (! $progressed && ! empty($post_ids)) {
+            if ($remaining >= $before && ! empty($post_ids)) {
                 return ['ok' => false, 'code' => 'stuck'];
             }
 
@@ -254,12 +267,24 @@ class Storage
             return ['ok' => false, 'code' => 'invalid_state'];
         }
 
-        foreach (self::trashed_post_ids($slug, $batch_size) as $post_id) {
-            wp_untrash_post($post_id);
+        $before = self::usage($slug)['trash'];
+
+        $post_ids = self::trashed_post_ids($slug, $batch_size);
+        foreach ($post_ids as $post_id) {
+            if (wp_untrash_post($post_id)) {
+                delete_post_meta($post_id, self::META_TRASHED_FLAG);
+            }
         }
 
+        // Same progress-by-count reasoning as trash()/delete_permanently(): without it, a
+        // restore that is simply making slow progress (or a duplicate request) could get stuck
+        // behind a non-dismissible modal forever (judgment-day findings D and F).
         $remaining = self::usage($slug)['trash'];
         if ($remaining > 0) {
+            if ($remaining >= $before && ! empty($post_ids)) {
+                return ['ok' => false, 'code' => 'stuck'];
+            }
+
             return ['ok' => true, 'remaining' => $remaining, 'done' => false];
         }
 
@@ -300,34 +325,51 @@ class Storage
             return ['ok' => false, 'code' => 'collision'];
         }
 
-        $trash_count = self::usage($slug)['trash'];
-        if ($trash_count > 0 && $confirm !== $slug) {
+        $before = self::usage($slug)['trash'];
+        if ($before > 0 && $confirm !== $slug) {
             return ['ok' => false, 'code' => 'confirm_mismatch'];
         }
 
-        $post_ids   = self::trashed_post_ids($slug, $batch_size);
-        $progressed = false;
+        $post_ids = self::trashed_post_ids($slug, $batch_size);
 
         self::$allow_permanent_delete = true;
-        foreach ($post_ids as $post_id) {
-            if (wp_delete_post($post_id, true)) {
-                $progressed = true;
+        try {
+            foreach ($post_ids as $post_id) {
+                wp_delete_post($post_id, true);
             }
+        } finally {
+            // finally: a wp_delete_post() call (or a before_delete_post hook from another
+            // plugin) throwing partway through the loop must never leave the guard permanently
+            // open for every subsequent permanent-delete request on the site (judgment-day
+            // finding B).
+            self::$allow_permanent_delete = false;
         }
-        self::$allow_permanent_delete = false;
 
+        // Progress is measured by the remaining count, not by wp_delete_post()'s return value
+        // (see trash()/restore(); judgment-day finding F).
         $remaining = self::usage($slug)['trash'];
         if ($remaining > 0) {
-            if (! $progressed && ! empty($post_ids)) {
+            if ($remaining >= $before && ! empty($post_ids)) {
                 return ['ok' => false, 'code' => 'stuck'];
             }
 
             return ['ok' => true, 'remaining' => $remaining, 'done' => false];
         }
 
+        // Auto-drafts are deliberately excluded from usage()'s counts (see its docblock), so
+        // they never block trash()/delete_permanently() or trip the confirm-by-slug gate above —
+        // but once the definition itself is actually gone, its slug must not leave orphan
+        // auto-draft rows behind for WordPress to stumble over later (judgment-day finding E).
         self::$allow_permanent_delete = true;
-        wp_delete_post($entry['post_id'], true);
-        self::$allow_permanent_delete = false;
+        try {
+            foreach (self::auto_draft_post_ids($slug) as $post_id) {
+                wp_delete_post($post_id, true);
+            }
+
+            wp_delete_post($entry['post_id'], true);
+        } finally {
+            self::$allow_permanent_delete = false;
+        }
 
         return ['ok' => true, 'remaining' => 0, 'done' => true];
     }
@@ -367,8 +409,16 @@ class Storage
      * Hooked to the core `pre_delete_post` filter (see Cpt_Builder::init(); unconditional, not
      * gated by dev tools). Without this, WordPress's `wp_scheduled_delete` cron permanently
      * deletes trashed posts older than EMPTY_TRASH_DAYS on its own, bypassing the confirm-by-slug
-     * gate entirely. Covers both a trashed content post whose post_type belongs to a trashed
-     * definition and a trashed `odiseia_cpt_def` post itself.
+     * gate entirely.
+     *
+     * Ownership is tracked explicitly via META_TRASHED_FLAG, set by trash() on each content post
+     * it trashes and cleared by restore() — NOT by matching post_type against a trashed
+     * definition's slug. A slug match would also block a foreign plugin/theme that later
+     * registers the same slug from managing (and permanently cleaning up) its own trashed posts,
+     * which is exactly the kind of cross-plugin interference this guard must avoid (judgment-day
+     * finding A). This also keeps the hot path cheap: a single get_post_meta() call instead of
+     * self::get()'s find_all()+JSON-decode over every stored definition on every permanent
+     * delete site-wide (judgment-day finding C).
      *
      * @param bool|null $check        Short-circuit value: non-null here would already skip
      *                                `wp_delete_post()`'s own logic; untouched (returned as-is)
@@ -389,8 +439,7 @@ class Storage
             return false;
         }
 
-        $entry = self::get($post->post_type);
-        if (null !== $entry && 'trash' === $entry['status']) {
+        if (get_post_meta($post->ID, self::META_TRASHED_FLAG, true)) {
             return false;
         }
 
@@ -405,6 +454,16 @@ class Storage
      * querying), which is exactly the case for every paused or trashed definition — Registrar
      * only registers active (publish) ones. `$wpdb`/`get_posts()` build their SQL from the raw
      * `post_type` string and never require registration.
+     *
+     * 'content' deliberately uses the SAME status set as content_post_ids() (post_status 'any',
+     * which core excludes 'trash' AND 'auto-draft' from): this used to also count 'auto-draft'
+     * rows as content while content_post_ids() never returned them to be trashed, so trash()
+     * looped forever once only auto-drafts remained for a slug (judgment-day finding E).
+     * Auto-drafts are WordPress's own unsaved-post placeholders; excluding them here means they
+     * never block trash()/delete_permanently() or trip the confirm-by-slug gate. In exchange,
+     * delete_permanently() removes any leftover auto-drafts for the slug directly as part of its
+     * own cleanup, so a definition that is actually gone never leaves orphan auto-draft rows
+     * behind for its old slug.
      *
      * @param string $slug CPT slug.
      * @return array{content: int, trash: int}
@@ -423,7 +482,7 @@ class Storage
         foreach ($rows as $row) {
             if ('trash' === $row->post_status) {
                 $trash = (int) $row->num;
-            } else {
+            } elseif ('auto-draft' !== $row->post_status) {
                 $content += (int) $row->num;
             }
         }
@@ -507,6 +566,25 @@ class Storage
             'posts_per_page' => $limit,
             'orderby'        => 'ID',
             'order'          => 'ASC',
+            'fields'         => 'ids',
+        ]);
+    }
+
+    /**
+     * IDs of this CPT's own auto-draft posts (WordPress's unsaved-post placeholders, excluded
+     * from usage()'s counts — see its docblock). Used by delete_permanently() to clean up any
+     * leftover auto-drafts for a slug once the definition itself is gone, so none are left
+     * orphaned behind.
+     *
+     * @param string $slug CPT slug.
+     * @return int[]
+     */
+    private static function auto_draft_post_ids($slug)
+    {
+        return get_posts([
+            'post_type'      => $slug,
+            'post_status'    => 'auto-draft',
+            'posts_per_page' => -1,
             'fields'         => 'ids',
         ]);
     }

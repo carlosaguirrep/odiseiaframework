@@ -190,6 +190,13 @@ class Rest_Controller
         if (null === $entry) {
             return self::not_found_error();
         }
+        // A trashed definition is pending permanent delete (see Storage::delete_permanently()):
+        // editing it would silently resurrect a new 'draft'/'publish' definition for a slug the
+        // developer already asked to remove. Restore it first (Storage::restore()) if it should
+        // keep being edited.
+        if ('trash' === $entry['status']) {
+            return self::trashed_error();
+        }
 
         $definition         = Definition::normalize((array) $request->get_json_params());
         $definition['slug'] = $slug;
@@ -410,6 +417,20 @@ class Rest_Controller
             'odiseia_cpt_conflict',
             __('This slug is already used by another definition.', 'odiseiaframework'),
             ['status' => 409]
+        );
+    }
+
+    /**
+     * @return WP_Error 409 "this definition is trashed" error, in the same {path, code} shape as
+     *                  the other lifecycle codes (see Rest_Controller::lifecycle_error()), for
+     *                  PUT /definitions/{slug} on an already-trashed definition.
+     */
+    private static function trashed_error()
+    {
+        return new WP_Error(
+            'odiseia_cpt_trashed',
+            __('This definition is trashed; restore it before editing.', 'odiseiaframework'),
+            ['status' => 409, 'errors' => [['path' => 'slug', 'code' => 'trashed']]]
         );
     }
 }
