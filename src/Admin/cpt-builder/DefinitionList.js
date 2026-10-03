@@ -5,16 +5,24 @@ import { Button, Spinner } from '@wordpress/components';
 import { __, sprintf } from '@wordpress/i18n';
 
 /**
- * Lists every active and paused CPT definition (label, slug, status, field count) with a button
- * to create a new one and one to edit each existing row.
+ * Internal dependencies
+ */
+import LifecycleActions from './LifecycleActions';
+
+/**
+ * Lists every stored CPT definition (label, slug, status, field count) with a button to create a
+ * new one, one to edit each existing row, and pause/resume/delete controls (LifecycleActions).
+ * Trashed definitions (pending permanent delete) are included too, so their row is the only way
+ * back to Restore or step 2 of the delete flow.
  *
  * @param {Object}   props
  * @param {Array}    props.definitions Entries from GET /definitions (see Rest_Controller).
  * @param {boolean}  props.isLoading   Whether the initial fetch is still in flight.
  * @param {Function} props.onCreate    Called when "Add New" is pressed.
  * @param {Function} props.onEdit      Called with a definition entry when "Edit" is pressed.
+ * @param {Function} props.onChanged   Called after a lifecycle action succeeds, to reload the list.
  */
-export default function DefinitionList({ definitions, isLoading, onCreate, onEdit }) {
+export default function DefinitionList({ definitions, isLoading, onCreate, onEdit, onChanged }) {
     return (
         <div className="odiseia-cpt-builder-list">
             <div className="odiseia-cpt-builder-list__header">
@@ -54,6 +62,7 @@ export default function DefinitionList({ definitions, isLoading, onCreate, onEdi
                                     <Button variant="secondary" onClick={() => onEdit(entry)}>
                                         {__('Edit', 'odiseiaframework')}
                                     </Button>
+                                    <LifecycleActions entry={entry} onChanged={onChanged} />
                                 </td>
                             </tr>
                         ))}
