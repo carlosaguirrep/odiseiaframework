@@ -72,7 +72,7 @@ class Variations
                 __('Query Loop pre-configured for %s, with fields bound to their post meta.', 'odiseiaframework'),
                 $definition['labels']['plural']
             ),
-            'icon'        => $definition['menu_icon'],
+            'icon'        => self::variation_icon($definition['menu_icon']),
             'scope'       => ['inserter'],
             'isActive'    => ['namespace'],
             'attributes'  => [
@@ -104,6 +104,26 @@ class Variations
                 ['name' => 'core/query-no-results', 'attributes' => [], 'innerBlocks' => []],
             ],
         ];
+    }
+
+    /**
+     * Adapts `menu_icon` (stored with the `dashicons-` prefix, as `register_post_type()`'s own
+     * `menu_icon` argument expects it — see Definition::normalize()) to what a block variation's
+     * `icon` wants instead: the editor's `Icon`/`Dashicon` components always treat a plain string
+     * as a bare Dashicon id and prepend `dashicons-` themselves (same convention already used by
+     * ../../Admin/cpt-builder/field-types.js's getFieldTypeIcon()), so passing the prefixed value
+     * through unchanged renders a non-existent `dashicons-dashicons-*` class and no icon at all.
+     * A non-dashicon value (URL, data URI, base64 SVG — also valid for `menu_icon`, see
+     * Definition::normalize()) never has this prefix, so it is returned as-is.
+     *
+     * @param string $menu_icon Definition's `menu_icon` value.
+     * @return string Variation `icon` value.
+     */
+    private static function variation_icon($menu_icon)
+    {
+        $prefix = 'dashicons-';
+
+        return 0 === strpos($menu_icon, $prefix) ? substr($menu_icon, strlen($prefix)) : $menu_icon;
     }
 
     /**
