@@ -202,6 +202,18 @@ class Definition
     }
 
     /**
+     * Reserved slugs and current public query vars combined, for the admin form's client-side
+     * validation (see src/Admin/cpt-builder/validation.js). PHP stays the single source of truth:
+     * the list is sent to the browser, never duplicated there, so it can never drift.
+     *
+     * @return string[]
+     */
+    public static function reserved_slugs_for_js()
+    {
+        return array_values(array_unique(array_merge(self::RESERVED_SLUGS, self::public_query_vars())));
+    }
+
+    /**
      * WordPress's public query vars (e.g. 'author', 'order', 'feed'): a CPT slug matching one
      * would be shadowed in `WP::parse_request()`. Reads the live, filtered list off the main
      * `$wp` object when available (reflects query vars added by other plugins), falling back to
