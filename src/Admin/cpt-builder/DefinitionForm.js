@@ -2,7 +2,7 @@
  * WordPress dependencies
  */
 import { Button, CheckboxControl, Notice, TextControl } from '@wordpress/components';
-import { useState } from '@wordpress/element';
+import { useRef, useState } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
 
 /**
@@ -63,6 +63,9 @@ export default function DefinitionForm({ entry, existingSlugs, onCancel, onSaved
     const [errors, setErrors] = useState({});
     const [topLevelError, setTopLevelError] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
+    // A ref (not state) guards against a second submit fired before React re-renders with
+    // isSaving === true (e.g. a fast double click/Enter).
+    const isSavingRef = useRef(false);
 
     const updateFormState = (changes) => {
         setFormState((current) => ({ ...current, ...changes }));
@@ -70,6 +73,11 @@ export default function DefinitionForm({ entry, existingSlugs, onCancel, onSaved
 
     const handleSubmit = (event) => {
         event.preventDefault();
+
+        if (isSavingRef.current) {
+            return;
+        }
+
         setTopLevelError(null);
 
         const validationErrors = validateFormState(formState, {
@@ -84,9 +92,10 @@ export default function DefinitionForm({ entry, existingSlugs, onCancel, onSaved
         }
 
         setErrors({});
+        isSavingRef.current = true;
         setIsSaving(true);
 
-        const payload = buildDefinitionPayload(formState);
+        const payload = buildDefinitionPayload(formState, isEditing ? entry.definition : undefined);
         const request = isEditing ? updateDefinition(entry.slug, payload) : createDefinition(payload);
 
         request
@@ -99,7 +108,10 @@ export default function DefinitionForm({ entry, existingSlugs, onCancel, onSaved
                     error?.message || __('The definition could not be saved.', 'odiseiaframework')
                 );
             })
-            .finally(() => setIsSaving(false));
+            .finally(() => {
+                isSavingRef.current = false;
+                setIsSaving(false);
+            });
     };
 
     return (
@@ -138,6 +150,11 @@ export default function DefinitionForm({ entry, existingSlugs, onCancel, onSaved
 
             <fieldset>
                 <legend>{__('Taxonomies', 'odiseiaframework')}</legend>
+                {errors.taxonomies && (
+                    <p className="components-base-control__help odiseia-cpt-builder-form__error">
+                        {errors.taxonomies}
+                    </p>
+                )}
                 {ALLOWED_TAXONOMIES.map((taxonomy) => (
                     <CheckboxControl
                         key={taxonomy}

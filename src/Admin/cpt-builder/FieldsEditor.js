@@ -30,7 +30,8 @@ export function createEmptyField() {
  * @param {Object}   props
  * @param {Array}    props.fields  Current field rows (see createEmptyField()).
  * @param {Object}   props.errors  `{ path: message }` map from error-map.js, keyed by
- *                                 `fields.{index}.{key|label|type}`.
+ *                                 `fields.{index}.{key|label|type}` for row errors, and `fields`
+ *                                 itself for a definition-level error (e.g. too many fields).
  * @param {Function} props.onChange Called with the updated fields array on every edit.
  */
 export default function FieldsEditor({ fields, errors, onChange }) {
@@ -51,6 +52,12 @@ export default function FieldsEditor({ fields, errors, onChange }) {
     return (
         <div className="odiseia-cpt-builder-fields">
             <h2>{__('Fields', 'odiseiaframework')}</h2>
+
+            {errors.fields && (
+                <p className="components-base-control__help odiseia-cpt-builder-form__error">
+                    {errors.fields}
+                </p>
+            )}
 
             {fields.map((field, index) => (
                 <div className="odiseia-cpt-builder-fields__row" key={field.id}>
