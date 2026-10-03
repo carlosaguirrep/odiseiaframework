@@ -21,6 +21,9 @@ class Cpt_Builder
 
         add_action('wp_loaded', [self::class, 'maybe_flush_rewrite_rules']);
         add_action('admin_notices', [Registrar::class, 'render_collision_notice']);
+        // Not gated by Dev_Tools::is_visible(): a lifecycle-trashed post must stay protected from
+        // wp_scheduled_delete regardless of whether the management UI is shown.
+        add_filter('pre_delete_post', [Storage::class, 'guard_scheduled_delete'], 10, 3);
 
         if (\odiseIAFramework\Dev_Tools::is_visible()) {
             add_action('rest_api_init', [Rest_Controller::class, 'register_routes']);

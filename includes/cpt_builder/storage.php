@@ -24,6 +24,15 @@ class Storage
     const FLUSH_OPTION = 'odiseia_cpt_flush_rewrite';
 
     /**
+     * Set around the wp_delete_post() calls inside delete_permanently() so
+     * guard_scheduled_delete() lets them through. Never true outside that method: this is the
+     * only path allowed to permanently delete a trashed odiseia-owned post or definition.
+     *
+     * @var bool
+     */
+    private static $allow_permanent_delete = false;
+
+    /**
      * Registers the private storage post type. Called once from Cpt_Builder::init().
      */
     public static function register_post_type()
@@ -56,15 +65,22 @@ class Storage
     }
 
     /**
-     * Active and paused definitions, keyed by slug. Trashed definitions (pending permanent
-     * delete) are excluded: their CPT must stop registering as soon as trash starts.
+     * Every stored definition, keyed by slug.
      *
+     * @param bool $include_trash Whether to also include trashed definitions (pending permanent
+     *                            delete). Registrar::register_all() keeps the default (false):
+     *                            it filters by 'publish' itself, but a trashed CPT must stop
+     *                            registering as soon as trash starts regardless. The admin list
+     *                            (GET /definitions) passes true, since a trashed definition's
+     *                            row is the only way back to Restore or step 2 of delete.
      * @return array<string, array{post_id: int, status: string, definition: array}>
      */
-    public static function all()
+    public static function all($include_trash = false)
     {
+        $statuses = $include_trash ? ['publish', 'draft', 'trash'] : ['publish', 'draft'];
+
         $by_slug = [];
-        foreach (self::find_all(['publish', 'draft']) as $entry) {
+        foreach (self::find_all($statuses) as $entry) {
             $by_slug[$entry['definition']['slug']] = $entry;
         }
 
@@ -164,8 +180,9 @@ class Storage
      * Step 1 of two-step delete: trashes this CPT's own content posts (see content_post_ids()),
      * in batches of $batch_size, then trashes the definition itself once none remain. Refuses
      * when the site's trash is disabled (EMPTY_TRASH_DAYS === 0: wp_trash_post() force-deletes
-     * instead of trashing in that case, post.php:4085) and requires the slug to be typed back
-     * when content posts exist.
+     * instead of trashing in that case, post.php:4085), when the slug is actually owned by a
+     * foreign plugin/theme registration (see is_foreign_owned()), and requires the slug to be
+     * typed back when content posts exist.
      *
      * @param string $slug       CPT slug.
      * @param string $confirm    Developer-typed slug; only checked when content posts exist.
@@ -181,6 +198,9 @@ class Storage
         if ('trash' === $entry['status']) {
             return ['ok' => false, 'code' => 'already_trashed'];
         }
+        if (self::is_foreign_owned($slug, $entry['status'])) {
+            return ['ok' => false, 'code' => 'collision'];
+        }
         if (defined('EMPTY_TRASH_DAYS') && 0 === (int) EMPTY_TRASH_DAYS) {
             return ['ok' => false, 'code' => 'trash_disabled'];
         }
@@ -190,12 +210,20 @@ class Storage
             return ['ok' => false, 'code' => 'confirm_mismatch'];
         }
 
-        foreach (self::content_post_ids($slug, $batch_size) as $post_id) {
-            wp_trash_post($post_id);
+        $post_ids   = self::content_post_ids($slug, $batch_size);
+        $progressed = false;
+        foreach ($post_ids as $post_id) {
+            if (wp_trash_post($post_id)) {
+                $progressed = true;
+            }
         }
 
         $remaining = self::usage($slug)['content'];
         if ($remaining > 0) {
+            if (! $progressed && ! empty($post_ids)) {
+                return ['ok' => false, 'code' => 'stuck'];
+            }
+
             return ['ok' => true, 'remaining' => $remaining, 'done' => false];
         }
 
@@ -206,15 +234,17 @@ class Storage
     }
 
     /**
-     * Undoes trash(): restores the definition's own trashed content posts and sets the
-     * definition back to 'draft' (paused), not 'publish' — the developer resumes it explicitly
-     * via resume(), so a restore can never silently re-expose a CPT that was being deleted on
-     * purpose.
+     * Undoes trash(): restores the definition's own trashed content posts, in batches of
+     * $batch_size like trash()/delete_permanently(), and sets the definition back to 'draft'
+     * (paused) only once none remain — not 'publish', the developer resumes it explicitly via
+     * resume(), so a restore can never silently re-expose a CPT that was being deleted on
+     * purpose, and never leaves the definition flipped while content posts are still trashed.
      *
-     * @param string $slug CPT slug.
-     * @return array{ok: bool, code?: string}
+     * @param string $slug       CPT slug.
+     * @param int    $batch_size Max trashed posts restored per call.
+     * @return array{ok: bool, code?: string, remaining?: int, done?: bool}
      */
-    public static function restore($slug)
+    public static function restore($slug, $batch_size = 100)
     {
         $entry = self::get($slug);
         if (null === $entry) {
@@ -224,20 +254,33 @@ class Storage
             return ['ok' => false, 'code' => 'invalid_state'];
         }
 
-        foreach (self::trashed_post_ids($slug, -1) as $post_id) {
+        foreach (self::trashed_post_ids($slug, $batch_size) as $post_id) {
             wp_untrash_post($post_id);
+        }
+
+        $remaining = self::usage($slug)['trash'];
+        if ($remaining > 0) {
+            return ['ok' => true, 'remaining' => $remaining, 'done' => false];
         }
 
         wp_update_post(['ID' => $entry['post_id'], 'post_status' => 'draft'], true);
         update_option(self::FLUSH_OPTION, 1);
 
-        return ['ok' => true];
+        return ['ok' => true, 'remaining' => 0, 'done' => true];
     }
 
     /**
      * Step 2 of two-step delete: permanently removes already-trashed content posts (in batches),
      * then the definition itself once none remain. Only valid once trash() completed step 1.
-     * Requires the slug to be typed back when trashed content posts exist.
+     * Refuses when the slug is actually owned by a foreign plugin/theme registration (see
+     * is_foreign_owned()) and requires the slug to be typed back when trashed content posts
+     * exist.
+     *
+     * Sets $allow_permanent_delete around every wp_delete_post() call so
+     * guard_scheduled_delete() (hooked to `pre_delete_post`) lets them through — that filter
+     * blocks any other caller, in particular WordPress's own `wp_scheduled_delete` cron, from
+     * permanently removing a lifecycle-trashed content post or definition behind this method's
+     * back.
      *
      * @param string $slug       CPT slug.
      * @param string $confirm    Developer-typed slug; only checked when trashed posts exist.
@@ -253,24 +296,105 @@ class Storage
         if ('trash' !== $entry['status']) {
             return ['ok' => false, 'code' => 'invalid_state'];
         }
+        if (self::is_foreign_owned($slug, $entry['status'])) {
+            return ['ok' => false, 'code' => 'collision'];
+        }
 
         $trash_count = self::usage($slug)['trash'];
         if ($trash_count > 0 && $confirm !== $slug) {
             return ['ok' => false, 'code' => 'confirm_mismatch'];
         }
 
-        foreach (self::trashed_post_ids($slug, $batch_size) as $post_id) {
-            wp_delete_post($post_id, true);
+        $post_ids   = self::trashed_post_ids($slug, $batch_size);
+        $progressed = false;
+
+        self::$allow_permanent_delete = true;
+        foreach ($post_ids as $post_id) {
+            if (wp_delete_post($post_id, true)) {
+                $progressed = true;
+            }
         }
+        self::$allow_permanent_delete = false;
 
         $remaining = self::usage($slug)['trash'];
         if ($remaining > 0) {
+            if (! $progressed && ! empty($post_ids)) {
+                return ['ok' => false, 'code' => 'stuck'];
+            }
+
             return ['ok' => true, 'remaining' => $remaining, 'done' => false];
         }
 
+        self::$allow_permanent_delete = true;
         wp_delete_post($entry['post_id'], true);
+        self::$allow_permanent_delete = false;
 
         return ['ok' => true, 'remaining' => 0, 'done' => true];
+    }
+
+    /**
+     * Whether $slug's posts actually belong to a foreign plugin/theme registration rather than
+     * this definition, so trash()/delete_permanently() can refuse instead of destroying posts
+     * that are not theirs.
+     *
+     * An active ('publish') definition registers its own post type (see
+     * Registrar::register_one()); when that registration lost to a pre-existing foreign one,
+     * Registrar records the slug in Registrar::COLLISIONS_OPTION instead of registering it, so
+     * that option is authoritative while the definition is active. Paused ('draft') and trashed
+     * definitions are never registered by this plugin (Registrar::register_all() only registers
+     * 'publish' ones), so any existing registration for the slug (post_type_exists()) in that
+     * state must belong to someone else.
+     *
+     * @param string $slug   CPT slug.
+     * @param string $status Definition's current post_status.
+     * @return bool
+     */
+    private static function is_foreign_owned($slug, $status)
+    {
+        if ('publish' === $status) {
+            $collisions = get_option(Registrar::COLLISIONS_OPTION, []);
+
+            return is_array($collisions) && in_array($slug, $collisions, true);
+        }
+
+        return post_type_exists($slug);
+    }
+
+    /**
+     * Blocks any permanent post deletion that is not routed through delete_permanently(), for a
+     * post that this plugin has already put in the trash as part of its own two-step delete.
+     *
+     * Hooked to the core `pre_delete_post` filter (see Cpt_Builder::init(); unconditional, not
+     * gated by dev tools). Without this, WordPress's `wp_scheduled_delete` cron permanently
+     * deletes trashed posts older than EMPTY_TRASH_DAYS on its own, bypassing the confirm-by-slug
+     * gate entirely. Covers both a trashed content post whose post_type belongs to a trashed
+     * definition and a trashed `odiseia_cpt_def` post itself.
+     *
+     * @param bool|null $check        Short-circuit value: non-null here would already skip
+     *                                `wp_delete_post()`'s own logic; untouched (returned as-is)
+     *                                when this call is not one we need to block.
+     * @param \WP_Post  $post         Post about to be permanently deleted.
+     * @param bool      $force_delete Whether the caller forced deletion. Unused: `pre_delete_post`
+     *                                fires before core's own trash/force-delete branching, so a
+     *                                trashed post reaches here regardless of this flag.
+     * @return bool|null
+     */
+    public static function guard_scheduled_delete($check, $post, $force_delete)
+    {
+        if (self::$allow_permanent_delete || 'trash' !== $post->post_status) {
+            return $check;
+        }
+
+        if (self::POST_TYPE === $post->post_type) {
+            return false;
+        }
+
+        $entry = self::get($post->post_type);
+        if (null !== $entry && 'trash' === $entry['status']) {
+            return false;
+        }
+
+        return $check;
     }
 
     /**

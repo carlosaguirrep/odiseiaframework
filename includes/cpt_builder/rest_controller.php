@@ -85,6 +85,8 @@ class Rest_Controller
 
         register_rest_route(self::NAMESPACE_V1, '/definitions/(?P<slug>[a-z][a-z0-9_-]*)/restore', [
             [
+                // Undoes trash(). Batched (see Storage::restore()): call again while the
+                // response's `done` is false.
                 'methods'             => 'POST',
                 'callback'            => [self::class, 'restore_item'],
                 'permission_callback' => [self::class, 'permissions_check'],
@@ -119,14 +121,14 @@ class Rest_Controller
     }
 
     /**
-     * GET /definitions — active and paused definitions (trashed definitions are reached only by
-     * slug, via get_item(), since they are pending permanent delete).
+     * GET /definitions — every stored definition, including trashed ones (pending permanent
+     * delete): the admin list is their only way back to Restore or step 2 of the delete flow.
      *
      * @return \WP_REST_Response
      */
     public static function get_items()
     {
-        return rest_ensure_response(array_values(array_map([self::class, 'format_entry'], Storage::all())));
+        return rest_ensure_response(array_values(array_map([self::class, 'format_entry'], Storage::all(true))));
     }
 
     /**
@@ -246,7 +248,8 @@ class Rest_Controller
     }
 
     /**
-     * POST /definitions/{slug}/restore — undoes trash().
+     * POST /definitions/{slug}/restore — undoes trash(). Batched (see Storage::restore()): call
+     * again while the response's `done` is false.
      *
      * @param WP_REST_Request $request Request with a `slug` URL parameter.
      * @return \WP_REST_Response|WP_Error
@@ -323,6 +326,8 @@ class Rest_Controller
             'already_trashed'  => ['odiseia_cpt_invalid_state', __('This definition is already trashed.', 'odiseiaframework'), 409],
             'trash_disabled'   => ['odiseia_cpt_trash_disabled', __('The trash is disabled on this site; permanent delete only.', 'odiseiaframework'), 409],
             'confirm_mismatch' => ['odiseia_cpt_confirm_mismatch', __('Type the slug exactly to confirm.', 'odiseiaframework'), 400],
+            'collision'        => ['odiseia_cpt_collision', __('This post type is managed by another plugin or theme; this action cannot continue.', 'odiseiaframework'), 409],
+            'stuck'            => ['odiseia_cpt_stuck', __('One or more posts could not be processed. Check for something blocking deletion and try again.', 'odiseiaframework'), 409],
         ];
 
         [$wp_code, $message, $status] = isset($errors[$code])
@@ -332,6 +337,8 @@ class Rest_Controller
         $data = ['status' => $status];
         if ('confirm_mismatch' === $code) {
             $data['errors'] = [['path' => 'confirm', 'code' => 'mismatch']];
+        } elseif (in_array($code, ['collision', 'stuck'], true)) {
+            $data['errors'] = [['path' => 'slug', 'code' => $code]];
         }
 
         return new WP_Error($wp_code, $message, $data);
