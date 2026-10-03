@@ -18,14 +18,34 @@ class Storage
     const META_KEY = '_odiseia_cpt_definition';
 
     /**
-     * Post meta set on a content post by trash() (value: the owning definition's slug) and
-     * cleared by restore(). guard_scheduled_delete() blocks permanent deletion of exactly the
-     * posts carrying this flag (plus a trashed `odiseia_cpt_def` post itself) instead of
-     * matching on post_type/slug, so a foreign plugin/theme that later registers the same slug
-     * can still manage (and permanently delete) its own posts without being blocked by a
-     * same-named definition we have in the trash.
+     * Post meta set on a trashed content post by trash() and cleared by restore().
+     * guard_scheduled_delete() blocks permanent deletion of exactly the posts carrying this flag
+     * (plus a trashed `odiseia_cpt_def` post itself) instead of matching on post_type/slug, so a
+     * foreign plugin/theme that later registers the same slug can still manage (and permanently
+     * delete) its own posts without being blocked by a same-named definition we have in the
+     * trash.
+     *
+     * The value distinguishes WHO trashed the post, which controls what restore() does with it:
+     * - self::TRASHED_BY_LIFECYCLE: trash() itself moved this post to the trash. restore()
+     *   untrashes it and clears the flag.
+     * - self::TRASHED_PREEXISTING: the post was already in the trash (e.g. trashed manually)
+     *   before trash() ran. trash() still stamps it so the guard protects it too, but restore()
+     *   only clears the flag — it leaves the post trashed, since the lifecycle never trashed it.
+     *
+     * delete_permanently() ignores the value entirely: once the definition itself is being
+     * destroyed, every trashed post for the slug (flagged or not) is removed, so none are left
+     * as orphans.
      */
     const META_TRASHED_FLAG = '_odiseia_lifecycle_trashed';
+
+    /** META_TRASHED_FLAG value for a content post that trash() itself moved to the trash. */
+    const TRASHED_BY_LIFECYCLE = 'lifecycle';
+
+    /**
+     * META_TRASHED_FLAG value for a content post that was already in the trash before trash()
+     * ran. See META_TRASHED_FLAG's docblock for why restore() treats this differently.
+     */
+    const TRASHED_PREEXISTING = 'preexisting';
 
     /**
      * Option flagging that rewrite rules need a flush after a definition changed. Cleared and
@@ -188,15 +208,20 @@ class Storage
 
     /**
      * Step 1 of two-step delete: trashes this CPT's own content posts (see content_post_ids()),
-     * in batches of $batch_size, then trashes the definition itself once none remain. Refuses
-     * when the site's trash is disabled (EMPTY_TRASH_DAYS === 0: wp_trash_post() force-deletes
-     * instead of trashing in that case, post.php:4085), when the slug is actually owned by a
-     * foreign plugin/theme registration (see is_foreign_owned()), and requires the slug to be
-     * typed back when content posts exist.
+     * in batches of $batch_size, then trashes the definition itself once none remain. Also
+     * stamps any of this slug's posts that were ALREADY trashed before this ran (e.g. trashed
+     * manually) with the META_TRASHED_FLAG::TRASHED_PREEXISTING value, batched and counted
+     * together with the content posts above, so that guard_scheduled_delete() protects them too
+     * while the definition waits for step 2 — restore() later tells the two kinds apart to avoid
+     * un-trashing posts the lifecycle never trashed. Refuses when the site's trash is disabled
+     * (EMPTY_TRASH_DAYS === 0: wp_trash_post() force-deletes instead of trashing in that case,
+     * post.php:4085), when the slug is actually owned by a foreign plugin/theme registration
+     * (see is_foreign_owned()), and requires the slug to be typed back when content posts exist.
      *
      * @param string $slug       CPT slug.
      * @param string $confirm    Developer-typed slug; only checked when content posts exist.
-     * @param int    $batch_size Max content posts trashed per call.
+     * @param int    $batch_size Max content posts trashed, and max pre-existing trashed posts
+     *                           flagged, per call.
      * @return array{ok: bool, code?: string, remaining?: int, done?: bool}
      */
     public static function trash($slug, $confirm, $batch_size = 100)
@@ -215,25 +240,37 @@ class Storage
             return ['ok' => false, 'code' => 'trash_disabled'];
         }
 
-        $before = self::usage($slug)['content'];
-        if ($before > 0 && $confirm !== $slug) {
+        $content_count = self::usage($slug)['content'];
+        if ($content_count > 0 && $confirm !== $slug) {
             return ['ok' => false, 'code' => 'confirm_mismatch'];
         }
+
+        $before = $content_count + self::count_unflagged_trashed($slug);
 
         $post_ids = self::content_post_ids($slug, $batch_size);
         foreach ($post_ids as $post_id) {
             if (wp_trash_post($post_id)) {
-                update_post_meta($post_id, self::META_TRASHED_FLAG, $slug);
+                update_post_meta($post_id, self::META_TRASHED_FLAG, self::TRASHED_BY_LIFECYCLE);
             }
+        }
+
+        // Posts of this slug that were already in the trash (e.g. trashed manually) before this
+        // call are not something trash() put there, but they still need the flag — otherwise
+        // guard_scheduled_delete() leaves them unprotected while the definition waits for step 2,
+        // and restore() would later un-trash posts the lifecycle never trashed. Stamped with a
+        // distinct value (see META_TRASHED_FLAG's docblock) so restore() can tell them apart.
+        $preexisting_ids = self::unflagged_trashed_post_ids($slug, $batch_size);
+        foreach ($preexisting_ids as $post_id) {
+            update_post_meta($post_id, self::META_TRASHED_FLAG, self::TRASHED_PREEXISTING);
         }
 
         // Progress is measured by the remaining count, not by wp_trash_post()'s return value:
         // it returns false for a post that is already trashed, which a duplicate/concurrent
         // request would otherwise misreport as 'stuck' even though the batch is making progress
         // (see judgment-day finding F).
-        $remaining = self::usage($slug)['content'];
+        $remaining = self::usage($slug)['content'] + self::count_unflagged_trashed($slug);
         if ($remaining > 0) {
-            if ($remaining >= $before && ! empty($post_ids)) {
+            if ($remaining >= $before && (! empty($post_ids) || ! empty($preexisting_ids))) {
                 return ['ok' => false, 'code' => 'stuck'];
             }
 
@@ -253,8 +290,16 @@ class Storage
      * resume(), so a restore can never silently re-expose a CPT that was being deleted on
      * purpose, and never leaves the definition flipped while content posts are still trashed.
      *
+     * Only acts on posts carrying META_TRASHED_FLAG (see its docblock), not every trashed post
+     * for the slug: a TRASHED_BY_LIFECYCLE post is untrashed and the flag cleared, a
+     * TRASHED_PREEXISTING post only has its flag cleared and is left in the trash, since
+     * trash() never actually trashed it. The remaining/stuck accounting below counts only
+     * flagged posts for the same reason — a trashed post this method will never touch (because
+     * trash() never flagged it) must not be counted as work still pending, or restore() would
+     * never be able to terminate.
+     *
      * @param string $slug       CPT slug.
-     * @param int    $batch_size Max trashed posts restored per call.
+     * @param int    $batch_size Max flagged trashed posts processed per call.
      * @return array{ok: bool, code?: string, remaining?: int, done?: bool}
      */
     public static function restore($slug, $batch_size = 100)
@@ -267,10 +312,15 @@ class Storage
             return ['ok' => false, 'code' => 'invalid_state'];
         }
 
-        $before = self::usage($slug)['trash'];
+        $before = self::count_flagged_trashed($slug);
 
-        $post_ids = self::trashed_post_ids($slug, $batch_size);
+        $post_ids = self::flagged_trashed_post_ids($slug, $batch_size);
         foreach ($post_ids as $post_id) {
+            if (self::TRASHED_PREEXISTING === get_post_meta($post_id, self::META_TRASHED_FLAG, true)) {
+                delete_post_meta($post_id, self::META_TRASHED_FLAG);
+                continue;
+            }
+
             if (wp_untrash_post($post_id)) {
                 delete_post_meta($post_id, self::META_TRASHED_FLAG);
             }
@@ -279,7 +329,7 @@ class Storage
         // Same progress-by-count reasoning as trash()/delete_permanently(): without it, a
         // restore that is simply making slow progress (or a duplicate request) could get stuck
         // behind a non-dismissible modal forever (judgment-day findings D and F).
-        $remaining = self::usage($slug)['trash'];
+        $remaining = self::count_flagged_trashed($slug);
         if ($remaining > 0) {
             if ($remaining >= $before && ! empty($post_ids)) {
                 return ['ok' => false, 'code' => 'stuck'];
@@ -295,10 +345,14 @@ class Storage
     }
 
     /**
-     * Step 2 of two-step delete: permanently removes already-trashed content posts (in batches),
-     * then the definition itself once none remain. Only valid once trash() completed step 1.
-     * Refuses when the slug is actually owned by a foreign plugin/theme registration (see
-     * is_foreign_owned()) and requires the slug to be typed back when trashed content posts
+     * Step 2 of two-step delete: permanently removes already-trashed content posts AND this
+     * slug's auto-draft posts (in batches, sharing the same $batch_size budget — see
+     * auto_draft_post_ids()), then the definition itself once none remain. Only valid once
+     * trash() completed step 1. Removes ALL trashed posts of the slug regardless of
+     * META_TRASHED_FLAG (unlike restore(); see its docblock): the CPT is going away entirely, so
+     * a post this plugin never flagged (e.g. trashed manually) would otherwise be left behind as
+     * an orphan. Refuses when the slug is actually owned by a foreign plugin/theme registration
+     * (see is_foreign_owned()) and requires the slug to be typed back when trashed content posts
      * exist.
      *
      * Sets $allow_permanent_delete around every wp_delete_post() call so
@@ -309,7 +363,8 @@ class Storage
      *
      * @param string $slug       CPT slug.
      * @param string $confirm    Developer-typed slug; only checked when trashed posts exist.
-     * @param int    $batch_size Max trashed posts permanently deleted per call.
+     * @param int    $batch_size Max trashed posts and auto-drafts permanently deleted per call,
+     *                           combined.
      * @return array{ok: bool, code?: string, remaining?: int, done?: bool}
      */
     public static function delete_permanently($slug, $confirm, $batch_size = 100)
@@ -325,16 +380,30 @@ class Storage
             return ['ok' => false, 'code' => 'collision'];
         }
 
-        $before = self::usage($slug)['trash'];
-        if ($before > 0 && $confirm !== $slug) {
+        $trash_count = self::usage($slug)['trash'];
+        if ($trash_count > 0 && $confirm !== $slug) {
             return ['ok' => false, 'code' => 'confirm_mismatch'];
         }
 
+        $before = $trash_count + self::count_auto_drafts($slug);
+
         $post_ids = self::trashed_post_ids($slug, $batch_size);
+
+        // Auto-drafts spend whatever's left of this call's batch budget after the trashed posts
+        // above, instead of being deleted all at once regardless of $batch_size (judgment-day
+        // round 3 finding): a slug with many trashed posts AND many auto-drafts still finishes
+        // in a bounded number of calls. Guarded at 0 explicitly: get_posts()/WP_Query treats an
+        // explicit posts_per_page of 0 as "unset" and falls back to the site's default page
+        // size instead of returning no results, which would silently ignore a fully spent budget.
+        $auto_draft_budget = max(0, $batch_size - count($post_ids));
+        $auto_draft_ids    = $auto_draft_budget > 0 ? self::auto_draft_post_ids($slug, $auto_draft_budget) : [];
 
         self::$allow_permanent_delete = true;
         try {
             foreach ($post_ids as $post_id) {
+                wp_delete_post($post_id, true);
+            }
+            foreach ($auto_draft_ids as $post_id) {
                 wp_delete_post($post_id, true);
             }
         } finally {
@@ -346,26 +415,24 @@ class Storage
         }
 
         // Progress is measured by the remaining count, not by wp_delete_post()'s return value
-        // (see trash()/restore(); judgment-day finding F).
-        $remaining = self::usage($slug)['trash'];
+        // (see trash()/restore(); judgment-day finding F). Auto-drafts are deliberately excluded
+        // from usage()'s counts (see its docblock), so they never block trash() or trip the
+        // confirm-by-slug gate above — but they are folded into THIS accounting so that, once
+        // the definition itself is actually gone, its slug never leaves orphan auto-draft rows
+        // behind for WordPress to stumble over later (judgment-day finding E), and a slug with
+        // more auto-drafts than fit in one $batch_size still terminates across repeated calls
+        // (judgment-day round 3 finding) instead of being wiped in a single unbounded query.
+        $remaining = self::usage($slug)['trash'] + self::count_auto_drafts($slug);
         if ($remaining > 0) {
-            if ($remaining >= $before && ! empty($post_ids)) {
+            if ($remaining >= $before && (! empty($post_ids) || ! empty($auto_draft_ids))) {
                 return ['ok' => false, 'code' => 'stuck'];
             }
 
             return ['ok' => true, 'remaining' => $remaining, 'done' => false];
         }
 
-        // Auto-drafts are deliberately excluded from usage()'s counts (see its docblock), so
-        // they never block trash()/delete_permanently() or trip the confirm-by-slug gate above —
-        // but once the definition itself is actually gone, its slug must not leave orphan
-        // auto-draft rows behind for WordPress to stumble over later (judgment-day finding E).
         self::$allow_permanent_delete = true;
         try {
-            foreach (self::auto_draft_post_ids($slug) as $post_id) {
-                wp_delete_post($post_id, true);
-            }
-
             wp_delete_post($entry['post_id'], true);
         } finally {
             self::$allow_permanent_delete = false;
@@ -411,14 +478,15 @@ class Storage
      * deletes trashed posts older than EMPTY_TRASH_DAYS on its own, bypassing the confirm-by-slug
      * gate entirely.
      *
-     * Ownership is tracked explicitly via META_TRASHED_FLAG, set by trash() on each content post
-     * it trashes and cleared by restore() — NOT by matching post_type against a trashed
-     * definition's slug. A slug match would also block a foreign plugin/theme that later
-     * registers the same slug from managing (and permanently cleaning up) its own trashed posts,
-     * which is exactly the kind of cross-plugin interference this guard must avoid (judgment-day
-     * finding A). This also keeps the hot path cheap: a single get_post_meta() call instead of
-     * self::get()'s find_all()+JSON-decode over every stored definition on every permanent
-     * delete site-wide (judgment-day finding C).
+     * Ownership is tracked explicitly via META_TRASHED_FLAG, set by trash() on every trashed
+     * content post of the slug (both the ones it trashes itself and any pre-existing trashed
+     * ones it finds — see the flag's docblock) and cleared by restore() — NOT by matching
+     * post_type against a trashed definition's slug. A slug match would also block a foreign
+     * plugin/theme that later registers the same slug from managing (and permanently cleaning
+     * up) its own trashed posts, which is exactly the kind of cross-plugin interference this
+     * guard must avoid (judgment-day finding A). This also keeps the hot path cheap: a single
+     * get_post_meta() call instead of self::get()'s find_all()+JSON-decode over every stored
+     * definition on every permanent delete site-wide (judgment-day finding C).
      *
      * @param bool|null $check        Short-circuit value: non-null here would already skip
      *                                `wp_delete_post()`'s own logic; untouched (returned as-is)
@@ -552,7 +620,11 @@ class Storage
     }
 
     /**
-     * IDs of this CPT's own content posts currently in the trash, oldest first.
+     * IDs of ALL of this CPT's own content posts currently in the trash, oldest first,
+     * regardless of META_TRASHED_FLAG. Used only by delete_permanently(): the CPT is going away
+     * entirely, so every trashed post of the slug must go with it, flagged or not (see its
+     * docblock). restore() uses flagged_trashed_post_ids() instead, since it must not touch a
+     * post the lifecycle never trashed.
      *
      * @param string $slug  CPT slug.
      * @param int    $limit Max IDs returned, or -1 for all.
@@ -571,22 +643,134 @@ class Storage
     }
 
     /**
-     * IDs of this CPT's own auto-draft posts (WordPress's unsaved-post placeholders, excluded
-     * from usage()'s counts — see its docblock). Used by delete_permanently() to clean up any
-     * leftover auto-drafts for a slug once the definition itself is gone, so none are left
-     * orphaned behind.
+     * IDs of this CPT's own trashed content posts that carry META_TRASHED_FLAG (either value),
+     * oldest first. This is what restore() actually acts on — see its docblock for why a
+     * trashed post without the flag must never be touched or counted by restore().
      *
-     * @param string $slug CPT slug.
+     * @param string $slug  CPT slug.
+     * @param int    $limit Max IDs returned, or -1 for all.
      * @return int[]
      */
-    private static function auto_draft_post_ids($slug)
+    private static function flagged_trashed_post_ids($slug, $limit)
+    {
+        return get_posts([
+            'post_type'      => $slug,
+            'post_status'    => 'trash',
+            'posts_per_page' => $limit,
+            'orderby'        => 'ID',
+            'order'          => 'ASC',
+            'fields'         => 'ids',
+            'meta_key'       => self::META_TRASHED_FLAG,
+        ]);
+    }
+
+    /**
+     * IDs of this CPT's own trashed content posts that do NOT carry META_TRASHED_FLAG, oldest
+     * first — i.e. posts that were already in the trash before trash() ran. Used by trash() to
+     * find which of this slug's trashed posts still need the TRASHED_PREEXISTING stamp.
+     *
+     * @param string $slug  CPT slug.
+     * @param int    $limit Max IDs returned, or -1 for all.
+     * @return int[]
+     */
+    private static function unflagged_trashed_post_ids($slug, $limit)
+    {
+        return get_posts([
+            'post_type'      => $slug,
+            'post_status'    => 'trash',
+            'posts_per_page' => $limit,
+            'orderby'        => 'ID',
+            'order'          => 'ASC',
+            'fields'         => 'ids',
+            'meta_query'     => [
+                [
+                    'key'     => self::META_TRASHED_FLAG,
+                    'compare' => 'NOT EXISTS',
+                ],
+            ],
+        ]);
+    }
+
+    /**
+     * Count of this CPT's own trashed content posts that carry META_TRASHED_FLAG. Backs
+     * restore()'s before/remaining accounting — see flagged_trashed_post_ids().
+     *
+     * @param string $slug CPT slug.
+     * @return int
+     */
+    private static function count_flagged_trashed($slug)
+    {
+        global $wpdb;
+
+        return (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->posts} p
+                INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = %s
+                WHERE p.post_type = %s AND p.post_status = 'trash'",
+            self::META_TRASHED_FLAG,
+            $slug
+        ));
+    }
+
+    /**
+     * Count of this CPT's own trashed content posts that do NOT carry META_TRASHED_FLAG. Backs
+     * trash()'s before/remaining accounting — see unflagged_trashed_post_ids().
+     *
+     * @param string $slug CPT slug.
+     * @return int
+     */
+    private static function count_unflagged_trashed($slug)
+    {
+        global $wpdb;
+
+        return (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->posts} p
+                LEFT JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = %s
+                WHERE p.post_type = %s AND p.post_status = 'trash' AND m.post_id IS NULL",
+            self::META_TRASHED_FLAG,
+            $slug
+        ));
+    }
+
+    /**
+     * IDs of this CPT's own auto-draft posts (WordPress's unsaved-post placeholders, excluded
+     * from usage()'s counts — see its docblock), oldest first. Used by delete_permanently() to
+     * clean up any leftover auto-drafts for a slug once the definition itself is gone, so none
+     * are left orphaned behind. Capped by $limit (shared with the trashed-post batch budget —
+     * see delete_permanently()), not fetched all at once, so a slug with more auto-drafts than
+     * fit in one batch still terminates across repeated calls instead of being wiped in a single
+     * unbounded query.
+     *
+     * @param string $slug  CPT slug.
+     * @param int    $limit Max IDs returned, or -1 for all.
+     * @return int[]
+     */
+    private static function auto_draft_post_ids($slug, $limit)
     {
         return get_posts([
             'post_type'      => $slug,
             'post_status'    => 'auto-draft',
-            'posts_per_page' => -1,
+            'posts_per_page' => $limit,
+            'orderby'        => 'ID',
+            'order'          => 'ASC',
             'fields'         => 'ids',
         ]);
+    }
+
+    /**
+     * Count of this CPT's own auto-draft posts. Backs delete_permanently()'s before/remaining
+     * accounting — see auto_draft_post_ids().
+     *
+     * @param string $slug CPT slug.
+     * @return int
+     */
+    private static function count_auto_drafts($slug)
+    {
+        global $wpdb;
+
+        return (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = %s AND post_status = 'auto-draft'",
+            $slug
+        ));
     }
 
     /**
