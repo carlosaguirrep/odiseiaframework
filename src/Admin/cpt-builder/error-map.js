@@ -20,6 +20,16 @@ const TOP_LEVEL_MESSAGES = {
         reserved_prefix: __('Slug cannot start with "wp_".', 'odiseiaframework'),
         reserved: __('This slug is reserved by WordPress.', 'odiseiaframework'),
         conflict: __('This slug is already used by another post type.', 'odiseiaframework'),
+        // Lifecycle-only codes (trash/restore/delete, see Storage::trash()/delete_permanently()
+        // in includes/cpt_builder/storage.php), not returned by create/update validation.
+        collision: __(
+            'This post type is managed by another plugin or theme; this action cannot continue.',
+            'odiseiaframework'
+        ),
+        stuck: __(
+            'One or more posts could not be processed. Check for something blocking deletion and try again.',
+            'odiseiaframework'
+        ),
     },
     'labels.singular': {
         required: __('Singular label is required.', 'odiseiaframework'),
