@@ -28,10 +28,47 @@ class Cpt_Builder
         // Not gated by Dev_Tools::is_visible(): a lifecycle-trashed post must stay protected from
         // wp_scheduled_delete regardless of whether the management UI is shown.
         add_filter('pre_delete_post', [Storage::class, 'guard_scheduled_delete'], 10, 3);
+        // Editing a CPT post's own fields is a content-editing concern, not part of the CPT
+        // Builder management UI, so it is never gated by Dev_Tools::is_visible() either.
+        add_action('enqueue_block_editor_assets', [self::class, 'enqueue_fields_panel_assets']);
 
         if (\odiseIAFramework\Dev_Tools::is_visible()) {
             add_action('rest_api_init', [Rest_Controller::class, 'register_routes']);
             Admin_Page::init();
+        }
+    }
+
+    /**
+     * Enqueues the "CPT Fields" editor panel (src/Plugins/cpt-fields.js) and localizes each
+     * active CPT's field schema, so the panel can render the right control per field without any
+     * extra REST round-trip — the editor already loads the CURRENT post's own meta values via
+     * core-data, since every field's meta is registered with `show_in_rest => true` (see
+     * Registrar::register_one()). Only field metadata (key/label/type) is localized here, never
+     * meta VALUES: those stay gated by core's own per-post `read_post`/`edit_post` checks.
+     */
+    public static function enqueue_fields_panel_assets()
+    {
+        $fields = [];
+        foreach (Storage::all() as $slug => $entry) {
+            if ('publish' !== $entry['status']) {
+                continue; // Not registered — nothing to edit.
+            }
+
+            $fields[$slug] = array_map(static function ($field) {
+                return ['key' => $field['key'], 'label' => $field['label'], 'type' => $field['type']];
+            }, $entry['definition']['fields']);
+        }
+
+        if (empty($fields)) {
+            return;
+        }
+
+        if (\odiseIAFramework\Assets::enqueue_plugin_script('odiseiaframework-cpt-fields', 'cpt-fields')) {
+            wp_add_inline_script(
+                'odiseiaframework-cpt-fields',
+                'window.odiseiaCptFieldsSettings = ' . wp_json_encode(['fields' => $fields]) . ';',
+                'before'
+            );
         }
     }
 
