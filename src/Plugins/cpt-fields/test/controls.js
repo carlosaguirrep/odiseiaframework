@@ -65,9 +65,15 @@ describe('toMetaValue', () => {
         expect(toMetaValue('date', '2026-01-15')).toBe('2026-01-15');
     });
 
-    it('falls back to an empty string for a non-string text/url/date value', () => {
-        expect(toMetaValue('text', undefined)).toBe('');
-        expect(toMetaValue('date', null)).toBe('');
+    // Design: clearing a text/url/date control means "unset", not "store an empty string" — null
+    // tells the REST meta field to delete the key entirely (see WP_REST_Meta_Fields::update_value()),
+    // the same way an empty number/image control deletes its meta (see the next describe blocks).
+    it('maps an empty/non-string text/url/date value to null so the REST update deletes the meta', () => {
+        expect(toMetaValue('text', '')).toBe(null);
+        expect(toMetaValue('url', '')).toBe(null);
+        expect(toMetaValue('date', '')).toBe(null);
+        expect(toMetaValue('text', undefined)).toBe(null);
+        expect(toMetaValue('date', null)).toBe(null);
     });
 
     it('parses a number control value into a float, matching Registrar::sanitize_number()', () => {
@@ -75,10 +81,14 @@ describe('toMetaValue', () => {
         expect(toMetaValue('number', '0')).toBe(0);
     });
 
-    it('treats an unparsable number control value as 0, matching Registrar::sanitize_number()', () => {
-        expect(toMetaValue('number', '')).toBe(0);
-        expect(toMetaValue('number', 'not-a-number')).toBe(0);
-        expect(toMetaValue('number', undefined)).toBe(0);
+    // Design: "number / float or delete" — an empty or unparsable control value means "unset",
+    // not the stored float 0, so it must map to null (delete) rather than Registrar::sanitize_number()'s
+    // own 0 fallback (that fallback only guards a direct, non-empty REST write, never reached here).
+    it('maps an empty/unparsable number control value to null so the REST update deletes the meta', () => {
+        expect(toMetaValue('number', '')).toBe(null);
+        expect(toMetaValue('number', 'not-a-number')).toBe(null);
+        expect(toMetaValue('number', undefined)).toBe(null);
+        expect(toMetaValue('number', null)).toBe(null);
     });
 
     it('coerces the image control value (attachment id) to a positive integer', () => {
@@ -86,9 +96,11 @@ describe('toMetaValue', () => {
         expect(toMetaValue('image', '42')).toBe(42);
     });
 
-    it('treats a missing/invalid image control value as 0, matching Registrar::sanitize_image()', () => {
-        expect(toMetaValue('image', 0)).toBe(0);
-        expect(toMetaValue('image', undefined)).toBe(0);
-        expect(toMetaValue('image', null)).toBe(0);
+    // Design: a cleared/invalid image control (see the "Remove image" action) means "unset" too,
+    // so it maps to null (delete) rather than Registrar::sanitize_image()'s own 0 fallback.
+    it('maps a missing/invalid image control value to null so the REST update deletes the meta', () => {
+        expect(toMetaValue('image', 0)).toBe(null);
+        expect(toMetaValue('image', undefined)).toBe(null);
+        expect(toMetaValue('image', null)).toBe(null);
     });
 });

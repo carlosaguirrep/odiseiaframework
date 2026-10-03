@@ -63,27 +63,37 @@ export function toControlValue(fieldType, metaValue) {
 }
 
 /**
- * Converts a control's onChange value back into the value to store in post meta — mirroring
- * exactly what Registrar::sanitize_number()/sanitize_image() do server-side, so the value shown
- * immediately after a change (optimistic UI) matches what a page reload would show once the
- * server's own sanitize_callback has run.
+ * Converts a control's onChange value back into the value to store in post meta.
+ *
+ * Design: a cleared/empty control means "unset", not "store an empty/zero value" — every field
+ * type maps that case to `null`, which `WP_REST_Meta_Fields::update_value()` treats as "reset the
+ * field" and deletes the meta key entirely (see https://github.com/WordPress/wordpress-develop,
+ * wp-includes/rest-api/fields/class-wp-rest-meta-fields.php), so an unset value reads back empty
+ * on reload instead of a stored `0`/`""`. A non-empty value still mirrors exactly what
+ * Registrar::sanitize_number()/sanitize_image() do server-side for the number/image types, so the
+ * value shown immediately after a change (optimistic UI) matches what a page reload would show
+ * once the server's own sanitize_callback has run.
  *
  * @param {string} fieldType    CPT field type.
  * @param {*}      controlValue Value coming from the control's onChange.
- * @return {string|number} Meta-ready value.
+ * @return {string|number|null} Meta-ready value, or null to delete the meta.
  */
 export function toMetaValue(fieldType, controlValue) {
     const controlType = getControlType(fieldType);
 
     if (CONTROL_TYPES.NUMBER === controlType) {
+        if ('' === controlValue || null === controlValue || undefined === controlValue) {
+            return null;
+        }
+
         const number = parseFloat(controlValue);
-        return Number.isFinite(number) ? number : 0;
+        return Number.isFinite(number) ? number : null;
     }
 
     if (CONTROL_TYPES.IMAGE === controlType) {
         const id = parseInt(controlValue, 10);
-        return Number.isFinite(id) && id > 0 ? id : 0;
+        return Number.isFinite(id) && id > 0 ? id : null;
     }
 
-    return 'string' === typeof controlValue ? controlValue : '';
+    return 'string' === typeof controlValue && '' !== controlValue ? controlValue : null;
 }
