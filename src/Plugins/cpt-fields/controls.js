@@ -97,3 +97,39 @@ export function toMetaValue(fieldType, controlValue) {
 
     return 'string' === typeof controlValue && '' !== controlValue ? controlValue : null;
 }
+
+/**
+ * Decides what a number control's typed draft means for the post meta. The control keeps the raw
+ * typed string locally ("-", "1.", "1.0" are valid intermediate states while typing "-1.05"), so
+ * only a draft that is empty (unset -> null) or parses to a finite number is written to meta;
+ * anything else is left uncommitted instead of being normalized or turned into a meta delete.
+ *
+ * @param {string} draft Raw string typed in the number control.
+ * @return {{commit: boolean, value?: number|null}} Whether to write, and the meta value to write.
+ */
+export function getNumberDraftChange(draft) {
+    if ('' === draft || null === draft || undefined === draft) {
+        return { commit: true, value: null };
+    }
+
+    const value = toMetaValue('number', draft);
+    return null === value ? { commit: false } : { commit: true, value };
+}
+
+/**
+ * Whether a number control's local draft still represents the external meta value, i.e. the draft
+ * must be kept as typed instead of being resynced from meta. An uncommittable draft ("-") never
+ * reached meta, so it is always kept.
+ *
+ * @param {string} draft     Raw string typed in the number control.
+ * @param {*}      metaValue Current raw post meta value.
+ * @return {boolean} True when the draft should be kept.
+ */
+export function isDraftInSync(draft, metaValue) {
+    const change = getNumberDraftChange(draft);
+    if (!change.commit) {
+        return true;
+    }
+
+    return change.value === toMetaValue('number', toControlValue('number', metaValue));
+}

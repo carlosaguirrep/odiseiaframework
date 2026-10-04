@@ -2,21 +2,27 @@
  * WordPress dependencies
  */
 import { MediaUpload, MediaUploadCheck } from '@wordpress/block-editor';
-import { registerBlockBindingsSource } from '@wordpress/blocks';
 import { Button, PanelRow, TextControl } from '@wordpress/components';
-import { store as coreStore, useEntityProp } from '@wordpress/core-data';
+import { useEntityProp } from '@wordpress/core-data';
 import { useSelect } from '@wordpress/data';
 import { PluginDocumentSettingPanel, store as editorStore } from '@wordpress/editor';
+import { useEffect, useState } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
 import { registerPlugin } from '@wordpress/plugins';
 
 /**
  * Internal dependencies
  */
-import { CONTROL_TYPES, getControlType, toControlValue, toMetaValue } from './cpt-fields/controls';
+import {
+    CONTROL_TYPES,
+    getControlType,
+    getNumberDraftChange,
+    isDraftInSync,
+    toControlValue,
+    toMetaValue,
+} from './cpt-fields/controls';
 
 const PANEL_NAME = 'odiseia-cpt-fields';
-const BINDING_SOURCE_NAME = 'odiseia/attachment';
 
 // Localized by Cpt_Builder::enqueue_fields_panel_assets(): one entry per active CPT slug, each an
 // array of `{key, label, type}` (see Definition schema) — the same source of truth the Query
@@ -24,6 +30,38 @@ const BINDING_SOURCE_NAME = 'odiseia/attachment';
 // actually have.
 const SETTINGS = window.odiseiaCptFieldsSettings || {};
 const FIELDS_BY_POST_TYPE = SETTINGS.fields && 'object' === typeof SETTINGS.fields ? SETTINGS.fields : {};
+
+/**
+ * Number control with a local draft string: the raw typed text ("-", "1.", "1.0") is kept as
+ * typed, and meta is only written when the draft is empty or a finite number. The draft is
+ * resynced from meta only when meta changes to something the draft does not represent.
+ */
+function NumberField({ field, value, onChange }) {
+    const [draft, setDraft] = useState(toControlValue(field.type, value));
+
+    useEffect(() => {
+        if (!isDraftInSync(draft, value)) {
+            setDraft(toControlValue(field.type, value));
+        }
+        // Only an external meta change should resync; typing is handled in onChange.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [value]);
+
+    return (
+        <TextControl
+            label={field.label}
+            type="number"
+            value={draft}
+            onChange={(next) => {
+                setDraft(next);
+                const change = getNumberDraftChange(next);
+                if (change.commit) {
+                    onChange(change.value);
+                }
+            }}
+        />
+    );
+}
 
 /**
  * One control for one field, bound to the CURRENT post's own meta (already loaded by the editor
@@ -64,14 +102,11 @@ function CptField({ field, value, onChange }) {
         );
     }
 
-    const inputType =
-        CONTROL_TYPES.NUMBER === controlType
-            ? 'number'
-            : CONTROL_TYPES.DATE === controlType
-              ? 'date'
-              : CONTROL_TYPES.URL === controlType
-                ? 'url'
-                : 'text';
+    if (CONTROL_TYPES.NUMBER === controlType) {
+        return <NumberField field={field} value={value} onChange={onChange} />;
+    }
+
+    const inputType = CONTROL_TYPES.DATE === controlType ? 'date' : CONTROL_TYPES.URL === controlType ? 'url' : 'text';
 
     return (
         <TextControl
@@ -111,54 +146,3 @@ function CptFieldsPanel() {
 }
 
 registerPlugin('odiseia-cpt-fields', { render: CptFieldsPanel });
-
-/**
- * Client-side counterpart of Image_Binding::register_source() (PHP): lets the EDITOR preview an
- * image field's bound `url`/`alt` while editing a Query Loop template, instead of showing the
- * static placeholder until the page is saved and reloaded. Read-only — editing happens through
- * the "CPT Fields" panel above, or the image field's own meta, not inline on the bound attribute
- * — simply because this source defines no `setValues` callback; the block editor only allows
- * editing a bound attribute when a source provides one. Intentionally silent (returns {})
- * whenever the attachment or its entity record is not yet available, so a transient resolver
- * miss never throws.
- */
-registerBlockBindingsSource({
-    name: BINDING_SOURCE_NAME,
-    usesContext: ['postId', 'postType'],
-    getValues({ select, context, bindings }) {
-        const values = {};
-        const { postId, postType } = context || {};
-        if (!postId || !postType) {
-            return values;
-        }
-
-        const record = select(coreStore).getEntityRecord('postType', postType, postId);
-        const meta = record && record.meta ? record.meta : {};
-
-        Object.entries(bindings).forEach(([attributeName, binding]) => {
-            const key = binding && binding.args ? binding.args.key : undefined;
-            const attachmentId = key ? parseInt(meta[key], 10) : 0;
-            if (!attachmentId) {
-                return;
-            }
-
-            // getMedia() was deprecated in favor of the generic entity-record selector and is
-            // gone entirely from the core-data bundled with this WordPress version (confirmed:
-            // no longer present in wp-includes/js/dist/core-data.js) — calling it here would
-            // throw. Same underlying REST resource (wp/v2/media), accessed as the `attachment`
-            // post type entity instead.
-            const attachment = select(coreStore).getEntityRecord('postType', 'attachment', attachmentId);
-            if (!attachment) {
-                return;
-            }
-
-            if ('url' === attributeName) {
-                values.url = attachment.source_url;
-            } else if ('alt' === attributeName) {
-                values.alt = attachment.alt_text;
-            }
-        });
-
-        return values;
-    },
-});

@@ -31,10 +31,28 @@ class Cpt_Builder
         // Editing a CPT post's own fields is a content-editing concern, not part of the CPT
         // Builder management UI, so it is never gated by Dev_Tools::is_visible() either.
         add_action('enqueue_block_editor_assets', [self::class, 'enqueue_fields_panel_assets']);
+        add_action('enqueue_block_editor_assets', [self::class, 'enqueue_bindings_assets']);
 
         if (\odiseIAFramework\Dev_Tools::is_visible()) {
             add_action('rest_api_init', [Rest_Controller::class, 'register_routes']);
             Admin_Page::init();
+        }
+    }
+
+    /**
+     * Enqueues the client-side `odiseia/attachment` block bindings source
+     * (src/Plugins/cpt-bindings.js) on EVERY block editor screen, as long as at least one CPT is
+     * active. Query Loop variations (see Variations) are inserted in pages, posts and the Site
+     * Editor, not only on the CPT's own edit screen, so this script must not be gated by the
+     * current screen's post type like the fields panel is; it is tiny and localizes nothing.
+     */
+    public static function enqueue_bindings_assets()
+    {
+        foreach (Storage::all() as $entry) {
+            if ('publish' === $entry['status']) {
+                \odiseIAFramework\Assets::enqueue_plugin_script('odiseiaframework-cpt-bindings', 'cpt-bindings');
+                return;
+            }
         }
     }
 
@@ -51,7 +69,8 @@ class Cpt_Builder
      * screen: this callback used to run (and enqueue the script, and localize every CPT) on
      * every single post/page/CPT edit screen site-wide, not just the ones that are actually one
      * of our active CPTs, which is both needless asset weight and an unbounded localized payload
-     * as more CPTs are defined.
+     * as more CPTs are defined. The image preview bindings source is NOT part of this script (see
+     * enqueue_bindings_assets()) precisely because of this gate.
      */
     public static function enqueue_fields_panel_assets()
     {

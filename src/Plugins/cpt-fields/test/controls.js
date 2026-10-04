@@ -1,7 +1,14 @@
 /**
  * Internal dependencies
  */
-import { CONTROL_TYPES, getControlType, toControlValue, toMetaValue } from '../controls';
+import {
+    CONTROL_TYPES,
+    getControlType,
+    getNumberDraftChange,
+    isDraftInSync,
+    toControlValue,
+    toMetaValue,
+} from '../controls';
 
 describe('getControlType', () => {
     it('maps every CPT field type (see Definition::FIELD_TYPES) to a control type', () => {
@@ -102,5 +109,42 @@ describe('toMetaValue', () => {
         expect(toMetaValue('image', 0)).toBe(null);
         expect(toMetaValue('image', undefined)).toBe(null);
         expect(toMetaValue('image', null)).toBe(null);
+    });
+});
+
+describe('getNumberDraftChange', () => {
+    it('commits null for an empty draft (clears the meta)', () => {
+        expect(getNumberDraftChange('')).toEqual({ commit: true, value: null });
+    });
+
+    it('commits the parsed number once the draft is a finite number', () => {
+        expect(getNumberDraftChange('1.05')).toEqual({ commit: true, value: 1.05 });
+        expect(getNumberDraftChange('-3')).toEqual({ commit: true, value: -3 });
+        expect(getNumberDraftChange('1.')).toEqual({ commit: true, value: 1 });
+    });
+
+    it('does not commit intermediate typing states', () => {
+        expect(getNumberDraftChange('-')).toEqual({ commit: false });
+        expect(getNumberDraftChange('.')).toEqual({ commit: false });
+        expect(getNumberDraftChange('e')).toEqual({ commit: false });
+    });
+});
+
+describe('isDraftInSync', () => {
+    it('keeps a draft that parses to the current meta value', () => {
+        expect(isDraftInSync('1.0', 1)).toBe(true);
+        expect(isDraftInSync('1.', '1')).toBe(true);
+    });
+
+    it('treats an empty or uncommittable draft as in sync with an unset meta', () => {
+        expect(isDraftInSync('', undefined)).toBe(true);
+        expect(isDraftInSync('-', undefined)).toBe(true);
+        expect(isDraftInSync('', '')).toBe(true);
+    });
+
+    it('reports a draft out of sync when the external meta value differs', () => {
+        expect(isDraftInSync('1.5', 2)).toBe(false);
+        expect(isDraftInSync('1.5', undefined)).toBe(false);
+        expect(isDraftInSync('', 4)).toBe(false);
     });
 });
