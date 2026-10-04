@@ -34,3 +34,6 @@ core/*
 
 # Local skill registry cache
 .atl/
+# Composer dependencies
+vendor/
+.phpunit.result.cache

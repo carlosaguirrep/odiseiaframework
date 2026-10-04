@@ -199,9 +199,24 @@ Both builds come from one toolchain: `webpack.config.js` extends the default `@w
 
 > **Always run `npm run build` before committing.** `build/` is committed, and `npm run start` writes development output (unminified, with source maps) into it.
 
+### PHP tests (PHPUnit)
+
+PHP integration tests live in `tests/phpunit/` and run on the WordPress test suite (`wp-phpunit`). Locally they use the DDEV site's WordPress core and a **separate** `wordpress_test` database. The suite drops and recreates its tables on every run, so never point it at the site's `db` database (the config refuses any database name that does not end in `_test`).
+
+```bash
+# One-time setup, from the DDEV project root: create the test database
+ddev mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS wordpress_test; GRANT ALL ON wordpress_test.* TO 'db'@'%';"
+
+# Install dev dependencies and run the suite (from the plugin directory)
+ddev composer install -d wp-content/plugins/odiseiaframework
+ddev exec -d /var/www/html/wp-content/plugins/odiseiaframework composer test:php
+```
+
+Settings come from `tests/phpunit/wp-tests-config.php` and can be overridden with environment variables (`WP_CORE_DIR`, `WP_TESTS_DB_NAME`, `WP_TESTS_DB_USER`, `WP_TESTS_DB_PASSWORD`, `WP_TESTS_DB_HOST`, `WP_TESTS_TABLE_PREFIX`), which is how CI (`.github/workflows/ci.yml`) runs them against a MySQL service.
+
 ### WP-CLI smoke scripts
 
-PHP has no automated test runner in this plugin, so PHP-only features (e.g. CPT Builder storage and registration) ship a WP-CLI smoke script instead. These live in `tests/` and are **not** shipped in the plugin zip (see `package.json` → `files`).
+Some PHP-only features (e.g. CPT Builder storage and registration) also ship a WP-CLI smoke script for a quick manual check on the real site. These live in `tests/` and are **not** shipped in the plugin zip (see `package.json` → `files`).
 
 ```bash
 # Run the CPT Builder slice 1 (storage + registration) assertions; cleans up after itself
