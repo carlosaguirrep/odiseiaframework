@@ -4,6 +4,13 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   js:
     name: JS unit tests and build
@@ -24,7 +31,8 @@ jobs:
 
       # build/ is committed; fail when it is out of date with src/.
       - name: Check committed build is up to date
-        run: git diff --exit-code -- build/
+        run: |
+          test -z "$(git status --porcelain -- build/)" || { git status --porcelain -- build/; exit 1; }
 
   php:
     name: PHPUnit (PHP ${{ matrix.php }})
@@ -50,6 +58,8 @@ jobs:
 
     env:
       WP_CORE_DIR: /tmp/wordpress
+      # Keep in sync with the locked wp-phpunit/wp-phpunit version in composer.lock.
+      WP_VERSION: '7.1.1'
       WP_TESTS_DB_NAME: wordpress_test
       WP_TESTS_DB_USER: root
       WP_TESTS_DB_PASSWORD: root
@@ -67,7 +77,7 @@ jobs:
       - name: Download WordPress core
         run: |
           mkdir -p "$WP_CORE_DIR"
-          curl -sSL https://wordpress.org/latest.tar.gz | tar -xz --strip-components=1 -C "$WP_CORE_DIR"
+          curl -fsSL "https://wordpress.org/wordpress-${WP_VERSION}.tar.gz" | tar -xz --strip-components=1 -C "$WP_CORE_DIR"
 
       - run: composer install --no-interaction --no-progress
 

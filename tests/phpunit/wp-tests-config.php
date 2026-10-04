@@ -26,10 +26,18 @@ define('DB_HOST', $odiseia_env('WP_TESTS_DB_HOST', 'db'));
 define('DB_CHARSET', 'utf8mb4');
 define('DB_COLLATE', '');
 
-// Safety net: refuse any database whose name does not end in "_test", so a misconfigured
-// environment can never make the suite drop the development site's tables.
-if (! preg_match('/_test$/', DB_NAME)) {
+// Safety net, evaluated before WordPress can open any connection: refuse any database whose
+// name does not end in "_test" and any host outside a local allow-list (DDEV "db", loopback),
+// so a misconfigured environment can never make the suite drop a real site's tables.
+$odiseia_db_host = preg_replace('/:\d+\z/', '', DB_HOST);
+
+if (! preg_match('/_test\z/', DB_NAME)) {
     fwrite(STDERR, sprintf("Refusing to run tests against database \"%s\": its name must end in \"_test\".\n", DB_NAME));
+    exit(1);
+}
+
+if (! in_array($odiseia_db_host, array('db', '127.0.0.1', 'localhost'), true)) {
+    fwrite(STDERR, sprintf("Refusing to run tests against DB host \"%s\": allowed hosts are db, 127.0.0.1 and localhost (optionally with :port).\n", DB_HOST));
     exit(1);
 }
 
