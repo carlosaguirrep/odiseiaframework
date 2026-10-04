@@ -6,6 +6,7 @@ import {
     getControlType,
     getNumberDraftChange,
     isDraftInSync,
+    isNumberDraftInvalid,
     toControlValue,
     toMetaValue,
 } from '../controls';
@@ -163,5 +164,40 @@ describe('isDraftInSync', () => {
         expect(isDraftInSync('1.5', 2)).toBe(false);
         expect(isDraftInSync('1.5', undefined)).toBe(false);
         expect(isDraftInSync('', 4)).toBe(false);
+    });
+});
+
+describe('getNumberDraftChange comma decimal separator', () => {
+    it('normalizes a single comma to a dot', () => {
+        expect(getNumberDraftChange('1,5')).toEqual({ commit: true, value: 1.5 });
+        expect(getNumberDraftChange('-0,5')).toEqual({ commit: true, value: -0.5 });
+        expect(getNumberDraftChange(',5')).toEqual({ commit: true, value: 0.5 });
+    });
+
+    it('rejects ambiguous comma input', () => {
+        expect(getNumberDraftChange('1,000.5')).toEqual({ commit: false });
+        expect(getNumberDraftChange('1,2,3')).toEqual({ commit: false });
+    });
+});
+
+describe('isDraftInSync with comma draft', () => {
+    it('keeps a comma draft that matches meta', () => {
+        expect(isDraftInSync('1,5', 1.5)).toBe(true);
+        expect(isDraftInSync('1,5', 2)).toBe(false);
+    });
+});
+
+describe('isNumberDraftInvalid', () => {
+    it('flags non-empty uncommittable drafts', () => {
+        expect(isNumberDraftInvalid('12a')).toBe(true);
+        expect(isNumberDraftInvalid('5 kg')).toBe(true);
+        expect(isNumberDraftInvalid('1,2,3')).toBe(true);
+    });
+
+    it('does not flag empty or valid drafts', () => {
+        expect(isNumberDraftInvalid('')).toBe(false);
+        expect(isNumberDraftInvalid('   ')).toBe(false);
+        expect(isNumberDraftInvalid('1,5')).toBe(false);
+        expect(isNumberDraftInvalid('1.5')).toBe(false);
     });
 });

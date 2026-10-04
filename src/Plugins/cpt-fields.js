@@ -18,6 +18,7 @@ import {
     getControlType,
     getNumberDraftChange,
     isDraftInSync,
+    isNumberDraftInvalid,
     toControlValue,
     toMetaValue,
 } from './cpt-fields/controls';
@@ -52,11 +53,15 @@ function NumberField({ field, value, onChange }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [value]);
 
+    const invalid = isNumberDraftInvalid(draft);
+
     return (
         <TextControl
             label={field.label}
             type="text"
             inputMode="decimal"
+            help={invalid ? __('Enter a valid number.', 'odiseiaframework') : undefined}
+            aria-invalid={invalid ? 'true' : undefined}
             value={draft}
             onChange={(next) => {
                 setDraft(next);

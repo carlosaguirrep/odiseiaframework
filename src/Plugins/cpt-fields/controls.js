@@ -115,9 +115,15 @@ export function getNumberDraftChange(draft) {
         return { commit: true, value: null };
     }
 
-    const text = String(draft).trim();
+    let text = String(draft).trim();
     if ('' === text) {
         return { commit: true, value: null };
+    }
+
+    // Accept a single comma decimal separator ("1,5") when there is no dot; anything with more
+    // commas or mixed separators ("1,000.5", "1,2,3") stays invalid.
+    if (!text.includes('.') && 1 === text.split(',').length - 1) {
+        text = text.replace(',', '.');
     }
 
     // Strict full-string check: parseFloat("1abc") === 1, so it cannot be used to validate.
@@ -145,4 +151,19 @@ export function isDraftInSync(draft, metaValue) {
     }
 
     return change.value === toMetaValue('number', toControlValue('number', metaValue));
+}
+
+/**
+ * Whether a number control's draft is non-empty but cannot be committed to meta, so the UI can
+ * tell the user instead of silently ignoring it.
+ *
+ * @param {string} draft Raw string typed in the number control.
+ * @return {boolean} True when the draft is non-empty and invalid.
+ */
+export function isNumberDraftInvalid(draft) {
+    if (null === draft || undefined === draft || '' === String(draft).trim()) {
+        return false;
+    }
+
+    return !getNumberDraftChange(draft).commit;
 }
