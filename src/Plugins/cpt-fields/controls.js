@@ -98,6 +98,9 @@ export function toMetaValue(fieldType, controlValue) {
     return 'string' === typeof controlValue && '' !== controlValue ? controlValue : null;
 }
 
+// Optional minus, then digits with an optional fraction ("1.", "1.05") or a leading-dot fraction (".5").
+const COMPLETE_DECIMAL = /^-?(\d+\.?\d*|\.\d+)$/;
+
 /**
  * Decides what a number control's typed draft means for the post meta. The control keeps the raw
  * typed string locally ("-", "1.", "1.0" are valid intermediate states while typing "-1.05"), so
@@ -108,12 +111,22 @@ export function toMetaValue(fieldType, controlValue) {
  * @return {{commit: boolean, value?: number|null}} Whether to write, and the meta value to write.
  */
 export function getNumberDraftChange(draft) {
-    if ('' === draft || null === draft || undefined === draft) {
+    if (null === draft || undefined === draft) {
         return { commit: true, value: null };
     }
 
-    const value = toMetaValue('number', draft);
-    return null === value ? { commit: false } : { commit: true, value };
+    const text = String(draft).trim();
+    if ('' === text) {
+        return { commit: true, value: null };
+    }
+
+    // Strict full-string check: parseFloat("1abc") === 1, so it cannot be used to validate.
+    if (!COMPLETE_DECIMAL.test(text)) {
+        return { commit: false };
+    }
+
+    const value = parseFloat(text);
+    return Number.isFinite(value) ? { commit: true, value } : { commit: false };
 }
 
 /**

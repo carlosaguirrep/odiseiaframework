@@ -35,6 +35,11 @@ const FIELDS_BY_POST_TYPE = SETTINGS.fields && 'object' === typeof SETTINGS.fiel
  * Number control with a local draft string: the raw typed text ("-", "1.", "1.0") is kept as
  * typed, and meta is only written when the draft is empty or a finite number. The draft is
  * resynced from meta only when meta changes to something the draft does not represent.
+ *
+ * @param {Object}   props          Component props.
+ * @param {Object}   props.field    Field definition (`{key, label, type}`).
+ * @param {*}        props.value    Current raw post meta value.
+ * @param {Function} props.onChange Called with the meta value to store (null to delete).
  */
 function NumberField({ field, value, onChange }) {
     const [draft, setDraft] = useState(toControlValue(field.type, value));
@@ -50,7 +55,8 @@ function NumberField({ field, value, onChange }) {
     return (
         <TextControl
             label={field.label}
-            type="number"
+            type="text"
+            inputMode="decimal"
             value={draft}
             onChange={(next) => {
                 setDraft(next);

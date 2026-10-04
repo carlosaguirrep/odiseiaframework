@@ -127,6 +127,23 @@ describe('getNumberDraftChange', () => {
         expect(getNumberDraftChange('-')).toEqual({ commit: false });
         expect(getNumberDraftChange('.')).toEqual({ commit: false });
         expect(getNumberDraftChange('e')).toEqual({ commit: false });
+        expect(getNumberDraftChange('1e')).toEqual({ commit: false });
+        expect(getNumberDraftChange('abc')).toEqual({ commit: false });
+        expect(getNumberDraftChange('1abc')).toEqual({ commit: false });
+        expect(getNumberDraftChange('1.2.3')).toEqual({ commit: false });
+        expect(getNumberDraftChange('--1')).toEqual({ commit: false });
+        expect(getNumberDraftChange('-.')).toEqual({ commit: false });
+    });
+
+    it('accepts complete decimals including a leading dot', () => {
+        expect(getNumberDraftChange('-5')).toEqual({ commit: true, value: -5 });
+        expect(getNumberDraftChange('0.5')).toEqual({ commit: true, value: 0.5 });
+        expect(getNumberDraftChange('.5')).toEqual({ commit: true, value: 0.5 });
+        expect(getNumberDraftChange(' 7 ')).toEqual({ commit: true, value: 7 });
+    });
+
+    it('treats a whitespace-only draft as empty', () => {
+        expect(getNumberDraftChange('   ')).toEqual({ commit: true, value: null });
     });
 });
 
