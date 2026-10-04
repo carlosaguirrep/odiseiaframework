@@ -19,3 +19,5 @@ tests_add_filter('muplugins_loaded', static function () use ($odiseia_root) {
 });
 
 require $odiseia_tests_dir . '/includes/bootstrap.php';
+
+require_once __DIR__ . '/includes/Cpt_Builder_TestCase.php';
