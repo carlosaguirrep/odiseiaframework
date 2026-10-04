@@ -3,11 +3,13 @@
 namespace odiseIAFramework\Cpt_Builder;
 
 /**
- * Boots the CPT Builder module: storage post type, registrar, rewrite flush handling, and the
- * dev-tools-gated management UI (REST routes, admin page).
+ * Boots the CPT Builder module: storage post type, registrar, Query Loop variations, block
+ * bindings, rewrite flush handling, and the dev-tools-gated management UI (REST routes, admin
+ * page).
  *
- * Registration itself is never gated: existing CPTs must keep serving content even when dev
- * tools are hidden, so only the management UI below checks `Dev_Tools::is_visible()`.
+ * Registration, the Query Loop variation, and block bindings are never gated: existing CPTs and
+ * content relying on them must keep serving/rendering correctly even when dev tools are hidden,
+ * so only the management UI below checks `Dev_Tools::is_visible()`.
  */
 class Cpt_Builder
 {
@@ -18,6 +20,8 @@ class Cpt_Builder
     {
         Storage::register_post_type();
         Registrar::register_all();
+        Variations::init();
+        Image_Binding::register_source();
 
         add_action('wp_loaded', [self::class, 'maybe_flush_rewrite_rules']);
         add_action('admin_notices', [Registrar::class, 'render_collision_notice']);
