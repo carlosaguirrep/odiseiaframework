@@ -61,4 +61,13 @@ class RestPermissionsTest extends Cpt_Builder_TestCase
         $this->assertSame(200, $response->get_status());
         $this->assertSame(['odiseia_book'], wp_list_pluck($response->get_data(), 'slug'));
     }
+
+    public function test_administrator_can_pause_a_definition()
+    {
+        wp_set_current_user(self::factory()->user->create(['role' => 'administrator']));
+        $response = $this->dispatch('POST', '/definitions/odiseia_book/pause');
+
+        $this->assertSame(200, $response->get_status());
+        $this->assertSame('draft', Storage::get('odiseia_book')['status']);
+    }
 }

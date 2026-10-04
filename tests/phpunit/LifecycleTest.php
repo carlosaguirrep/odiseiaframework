@@ -142,6 +142,25 @@ class LifecycleTest extends Cpt_Builder_TestCase
         $this->assertNull(get_post($other));
     }
 
+    public function test_guard_only_blocks_posts_of_the_slug_that_carry_the_lifecycle_flag()
+    {
+        // Trashed by someone else before any lifecycle run: same slug, but no flag.
+        $foreign = $this->create_posts(1)[0];
+        wp_trash_post($foreign);
+        $this->assertSame('', get_post_meta($foreign, Storage::META_TRASHED_FLAG, true));
+
+        wp_delete_post($foreign, true);
+        $this->assertNull(get_post($foreign));
+
+        // A flagged post of the same slug is protected.
+        $flagged = $this->create_posts(1)[0];
+        wp_trash_post($flagged);
+        update_post_meta($flagged, Storage::META_TRASHED_FLAG, Storage::TRASHED_BY_LIFECYCLE);
+
+        wp_delete_post($flagged, true);
+        $this->assertNotNull(get_post($flagged));
+    }
+
     public function test_trash_refuses_a_slug_registered_by_someone_else()
     {
         // Active definition whose registration lost to a foreign one (flagged by Registrar).
